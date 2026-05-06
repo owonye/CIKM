@@ -13,17 +13,34 @@ The main experiments compare STAR against Vanilla RAG, Fixed larger-k RAG, and a
 
 ```text
 src/
+  data/                        # Dataset helpers and shared dataclass schemas
+  retrieval/                   # Retrieval interface and snapshot cache helpers
+  generation/                  # Answer normalization and generation-facing helpers
+  scoring/                     # Sufficiency, stability, and candidate utility scores
+  policies/                    # STOP / EXPAND / SELECT policy wrappers
+  eval/                        # Metrics, aggregation, and qualitative export helpers
   calibrate.py                 # Calibrates STAR and confidence thresholds
+  calibrate_stability.py       # Calibrates stability threshold and utility weights
   evaluate.py                  # Runs RAG baselines and computes EM/F1
   extract_case_analysis.py     # Extracts representative disagreement cases
   summarize_results.py         # Prints baseline summaries from evaluation CSVs
   summarize_failure_modes.py   # Aggregates STAR-vs-confidence failure modes
+  summarize_stability_results.py # Exports CIKM stability tables and examples
   run_experiments.py           # End-to-end experiment runner
   rag/                         # Retrieval, signal, and generation utilities
 
 scripts/
+  run_eval.py                  # End-to-end stability evaluation wrapper
+  run_ablation.py              # Ablation wrapper
+  make_tables.py               # Paper table export wrapper
   plot_tradeoff.py             # Regenerates the quality-cost figure
   run_hotpotqa_smoke.sh        # Small smoke-test runner
+
+configs/
+  base.yaml
+  hotpot.yaml
+  nq.yaml
+  ablation.yaml
 
 assets/
   rag_tradeoff.png             # Quality-cost figure used in the paper
@@ -176,22 +193,31 @@ The script reports:
 For the CIKM follow-up setting, `evaluate.py` can additionally run stability-aware baselines that diagnose sufficient-but-unstable evidence and select a targeted repair passage:
 
 ```bash
+python src/calibrate_stability.py \
+  --mode hotpotqa \
+  --manifest-path "$HOTPOT_DIR"/manifest_hotpotqa_1000.json \
+  --calibration-file "$HOTPOT_DIR"/calib_hotpotqa_1000.json \
+  --use-openai \
+  --candidate-pool-k 8 \
+  --output "$HOTPOT_DIR"/stability_calib_hotpotqa_1000.json
+
 python src/evaluate.py \
   --mode hotpotqa \
   --manifest-path "$HOTPOT_DIR"/manifest_hotpotqa_1000.json \
   --calibration-file "$HOTPOT_DIR"/calib_hotpotqa_1000.json \
   --confidence-calibration-file "$HOTPOT_DIR"/confidence_calib_hotpotqa_1000.json \
+  --stability-calibration-file "$HOTPOT_DIR"/stability_calib_hotpotqa_1000.json \
   --use-openai \
-  --baselines vanilla_rag,fixed_large_k_rag,structure_aware_adaptive_rag,diagnose_then_expand,random_selection,next_ranked_selection,stability_aware_selection \
+  --baselines vanilla_rag,fixed_large_k_rag,structure_aware_adaptive_rag,diagnose_then_expand,random_selection,next_ranked_selection,stability_aware_selection,oracle_best_candidate \
   --candidate-pool-k 8 \
-  --stability-threshold 0.8 \
-  --utility-alpha 0.3 \
-  --utility-beta 0.6 \
-  --utility-rho 0.1 \
   --output "$HOTPOT_DIR"/eval_hotpotqa_1000_stability.csv
+
+python src/summarize_stability_results.py \
+  --input "$HOTPOT_DIR"/eval_hotpotqa_1000_stability.csv \
+  --dataset hotpotqa
 ```
 
-The resulting CSV includes `anchoring_consistency`, `post_selection_consistency`, `stability_gain`, `recovered`, `diagnostic_generations`, `selected_doc_id`, and robust marginal value components for the selected candidate.
+The resulting CSV includes `anchoring_consistency`, `post_selection_consistency`, `stability_gain`, `recovered`, `diagnostic_generations`, `selected_doc_id`, robust marginal value components, and per-candidate details for ranking-quality analysis.
 
 ## Regenerating the Quality-Cost Figure
 

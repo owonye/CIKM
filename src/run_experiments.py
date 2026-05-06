@@ -189,6 +189,7 @@ def main() -> None:
             if args.confidence_calibration_out
             else output_dir / f"confidence_calib_{args.mode}_{size}.json"
         )
+        stability_calib_path = output_dir / f"stability_calib_{args.mode}_{size}.json"
 
         calibrate_cmd = [
             sys.executable,
@@ -243,6 +244,63 @@ def main() -> None:
                 ]
             )
         run_command(calibrate_cmd)
+
+        if args.run_stability_selection:
+            stability_calibrate_cmd = [
+                sys.executable,
+                "src/calibrate_stability.py",
+                "--mode",
+                args.mode,
+                "--doc-start",
+                str(current_doc_start),
+                "--doc-limit",
+                str(current_doc_limit),
+                "--corpus-split",
+                args.corpus_split,
+                "--query-start",
+                str(calib_query_start),
+                "--query-limit",
+                str(calib_query_limit),
+                "--query-split",
+                args.query_split,
+                "--embedding-model",
+                args.embedding_model,
+                "--retrieval-cache-dir",
+                args.retrieval_cache_dir,
+                "--nq-max-tokens",
+                str(args.nq_max_tokens),
+                "--nq-stride",
+                str(args.nq_stride),
+                "--initial-k",
+                str(args.initial_k),
+                "--expanded-k",
+                str(args.expanded_k),
+                "--candidate-pool-k",
+                str(args.candidate_pool_k),
+                "--weak-support-overlap-threshold",
+                str(args.weak_support_overlap_threshold),
+                "--seed",
+                str(args.seed),
+                "--manifest-path",
+                str(manifest_path),
+                "--calibration-file",
+                str(calib_path),
+                "--output",
+                str(stability_calib_path),
+            ]
+            if args.use_openai:
+                stability_calibrate_cmd.extend(
+                    [
+                        "--use-openai",
+                        "--openai-model",
+                        args.openai_model,
+                        "--openai-cache-path",
+                        args.openai_cache_path,
+                    ]
+                )
+            if args.allow_simple_generator:
+                stability_calibrate_cmd.append("--allow-simple-generator")
+            run_command(stability_calibrate_cmd)
 
         evaluate_cmd = [
             sys.executable,
@@ -313,11 +371,14 @@ def main() -> None:
         if args.run_stability_selection:
             evaluate_cmd.extend(
                 [
+                    "--stability-calibration-file",
+                    str(stability_calib_path),
                     "--baselines",
                     (
                         "vanilla_rag,fixed_large_k_rag,confidence_adaptive_rag,"
                         "structure_aware_adaptive_rag,diagnose_then_expand,"
-                        "random_selection,next_ranked_selection,stability_aware_selection"
+                        "random_selection,next_ranked_selection,stability_aware_selection,"
+                        "oracle_best_candidate"
                     ),
                 ]
             )

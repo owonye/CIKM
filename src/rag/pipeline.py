@@ -779,6 +779,7 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_sufficiency": None,
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
+                "candidate_details": [],
                 "answer": answer,
             }
 
@@ -812,6 +813,7 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_sufficiency": None,
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
+                "candidate_details": [],
                 "answer": base_answer,
             }
 
@@ -846,16 +848,27 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_sufficiency": None,
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
+                "candidate_details": [],
                 "answer": answer,
             }
 
+        utilities: List[CandidateUtility]
         if selection_strategy == "random":
             digest = hashlib.sha1(query.text.encode("utf-8")).hexdigest()
             selected = candidates[int(digest, 16) % len(candidates)]
             selected_utility = self._candidate_utility(query, initial_docs, selected, decision.sufficiency_score, consistency)
+            utilities = [selected_utility]
         elif selection_strategy == "next_ranked":
             selected = candidates[0]
             selected_utility = self._candidate_utility(query, initial_docs, selected, decision.sufficiency_score, consistency)
+            utilities = [selected_utility]
+        elif selection_strategy == "oracle":
+            utilities = [
+                self._candidate_utility(query, initial_docs, candidate, decision.sufficiency_score, consistency)
+                for candidate in candidates
+            ]
+            selected_utility = max(utilities, key=lambda item: item.delta_consistency)
+            selected = next(candidate for candidate in candidates if candidate.doc_id == selected_utility.candidate_doc_id)
         else:
             utilities = [
                 self._candidate_utility(query, initial_docs, candidate, decision.sufficiency_score, consistency)
@@ -866,7 +879,7 @@ class StabilityAwareEvidenceSelector:
 
         final_docs = initial_docs + [selected]
         answer = self.generator.generate(query, final_docs)
-        candidate_scoring_generations = 2 * len(candidates) if selection_strategy == "utility" else 2
+        candidate_scoring_generations = 2 * len(candidates) if selection_strategy in {"utility", "oracle"} else 2
         return {
             "query": query.text,
             "decision": "select_evidence",
@@ -889,6 +902,17 @@ class StabilityAwareEvidenceSelector:
             "candidate_delta_sufficiency": selected_utility.delta_sufficiency,
             "candidate_delta_consistency": selected_utility.delta_consistency,
             "candidate_redundancy_penalty": selected_utility.redundancy_penalty,
+            "candidate_details": [
+                {
+                    "candidate_doc_id": item.candidate_doc_id,
+                    "utility": item.utility,
+                    "delta_sufficiency": item.delta_sufficiency,
+                    "delta_consistency": item.delta_consistency,
+                    "redundancy_penalty": item.redundancy_penalty,
+                    "post_consistency": item.post_consistency,
+                }
+                for item in utilities
+            ],
             "answer": answer,
         }
 

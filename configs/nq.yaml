@@ -1,0 +1,7 @@
+dataset: nq
+corpus_split: validation
+query_split: validation
+query_limit: 1000
+expanded_k: 5
+nq_max_tokens: 180
+nq_stride: 90

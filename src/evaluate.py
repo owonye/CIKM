@@ -39,6 +39,7 @@ VALID_BASELINES = {
     "random_selection",
     "next_ranked_selection",
     "stability_aware_selection",
+    "oracle_best_candidate",
 }
 
 
@@ -298,6 +299,21 @@ def load_confidence_threshold(args: argparse.Namespace) -> float:
     return float(threshold)
 
 
+def apply_stability_calibration(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.stability_calibration_file:
+        return args
+    calibration_path = Path(args.stability_calibration_file).resolve()
+    if not calibration_path.exists():
+        raise FileNotFoundError(f"Stability calibration file not found: {calibration_path}")
+    config = json.loads(calibration_path.read_text(encoding="utf-8"))
+    best = config.get("best", config)
+    args.stability_threshold = float(best["stability_threshold"])
+    args.utility_alpha = float(best["utility_alpha"])
+    args.utility_beta = float(best["utility_beta"])
+    args.utility_rho = float(best["utility_rho"])
+    return args
+
+
 def run_vanilla(query: Query, retriever, generator, top_k: int = 3) -> dict[str, Any]:
     docs = retriever.retrieve(query, top_k=top_k)
     answer = generator.generate(query, docs)
@@ -510,6 +526,7 @@ def run_stability_aware_selection(
         "candidate_delta_sufficiency": result["candidate_delta_sufficiency"],
         "candidate_delta_consistency": result["candidate_delta_consistency"],
         "candidate_redundancy_penalty": result["candidate_redundancy_penalty"],
+        "candidate_details": result["candidate_details"],
         "answer": result["answer"],
     }
 
@@ -551,6 +568,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
                 "candidate_delta_sufficiency",
                 "candidate_delta_consistency",
                 "candidate_redundancy_penalty",
+                "candidate_details",
                 "oracle_initial_support",
                 "oracle_expanded_support",
                 "oracle_should_expand",
@@ -571,6 +589,8 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
             row["used_docs"] = "|".join(row["used_docs"])
             row["initial_doc_ids"] = "|".join(row["initial_doc_ids"])
             row["final_doc_ids"] = "|".join(row["final_doc_ids"])
+            if isinstance(row.get("candidate_details"), list):
+                row["candidate_details"] = json.dumps(row["candidate_details"], ensure_ascii=False)
             writer.writerow(row)
 
 
@@ -606,6 +626,7 @@ def main() -> None:
     parser.add_argument("--confidence-calibration-file", default="")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--calibration-file", default="")
+    parser.add_argument("--stability-calibration-file", default="")
     parser.add_argument(
         "--baselines",
         default="vanilla_rag,fixed_large_k_rag,confidence_adaptive_rag,structure_aware_adaptive_rag",
@@ -614,6 +635,7 @@ def main() -> None:
     parser.add_argument("--output", default="results/baseline_results.csv")
     args = parser.parse_args()
     args = resolve_manifest_overrides(args)
+    args = apply_stability_calibration(args)
     if not args.use_openai and args.mode != "demo" and not args.allow_simple_generator:
         raise ValueError("For paper-grade EM/F1, run evaluate.py with --use-openai.")
     set_global_seed(args.seed)
@@ -750,6 +772,7 @@ def main() -> None:
             "random_selection": "random",
             "next_ranked_selection": "next_ranked",
             "stability_aware_selection": "utility",
+            "oracle_best_candidate": "oracle",
         }
         for baseline_name, strategy in stability_baselines.items():
             if baseline_name not in selected_baselines:

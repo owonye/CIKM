@@ -1,0 +1,16 @@
+seed: 42
+initial_k: 3
+candidate_pool_k: 8
+stability_threshold: 0.8
+utility:
+  alpha: 0.3
+  beta: 0.6
+  rho: 0.1
+generator:
+  model: gpt-4.1-mini
+  prompt_version: short_answer_v2
+  deterministic: true
+retrieval:
+  embedding_model: BAAI/bge-small-en-v1.5
+  doc_start: 0
+  doc_limit: 20000
