@@ -19,7 +19,14 @@ class RandomSelectPolicy(ProposedSelectPolicy):
     ) -> PolicyDecision:
         digest = hashlib.sha1(query.text.encode("utf-8")).hexdigest()
         selected = candidates[int(digest, 16) % len(candidates)]
-        score = self.score_one(query, docs, selected, f_score, c_score)
+        score = self.score_one(
+            query,
+            docs,
+            selected,
+            f_score,
+            c_score,
+            replacement_candidates=[candidate for candidate in candidates if candidate.doc_id != selected.doc_id],
+        )
         return PolicyDecision(
             action="SELECT",
             reason="sufficient_but_unstable",

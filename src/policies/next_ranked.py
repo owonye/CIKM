@@ -16,7 +16,14 @@ class NextRankedSelectPolicy(ProposedSelectPolicy):
         c_score: float,
     ) -> PolicyDecision:
         selected = candidates[0]
-        score = self.score_one(query, docs, selected, f_score, c_score)
+        score = self.score_one(
+            query,
+            docs,
+            selected,
+            f_score,
+            c_score,
+            replacement_candidates=[candidate for candidate in candidates if candidate.doc_id != selected.doc_id],
+        )
         return PolicyDecision(
             action="SELECT",
             reason="sufficient_but_unstable",

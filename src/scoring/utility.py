@@ -23,11 +23,15 @@ def score_candidate(
     beta: float,
     rho: float,
     aspect_model: str = "BAAI/bge-small-en-v1.5",
+    replacement_candidates: list[RetrievedDocument] | None = None,
 ) -> CandidateScore:
     selected_docs = docs + [candidate]
     features = extract_evidence_features(query, selected_docs, aspect_model=aspect_model)
     post_f_score = estimator.predict(features).sufficiency_score
-    perturbations = build_fixed_candidate_perturbations(selected_docs)
+    perturbations = build_fixed_candidate_perturbations(
+        selected_docs,
+        replacement_candidates=replacement_candidates,
+    )
     post_c_score, _, _ = compute_anchoring_consistency(query, selected_docs, generator, perturbations)
     delta_f = post_f_score - base_f_score
     delta_c = post_c_score - base_c_score

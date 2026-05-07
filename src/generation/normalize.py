@@ -5,7 +5,8 @@ def normalize_answer(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
-    return text
+    tokens = [token for token in text.split() if token not in {"a", "an", "the"}]
+    return " ".join(tokens)
 
 
 def exact_match(prediction: str, gold: str) -> float:

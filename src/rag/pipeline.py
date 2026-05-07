@@ -332,7 +332,7 @@ def normalize_text(text: str) -> List[str]:
     text = text.lower().strip()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
-    return [token for token in text.split() if token]
+    return [token for token in text.split() if token and token not in {"a", "an", "the"}]
 
 
 def answer_f1(answer_a: str, answer_b: str) -> float:
@@ -364,6 +364,10 @@ def min_max_normalize(values: List[float]) -> List[float]:
     if max_v == min_v:
         return [1.0 for _ in values]
     return [(value - min_v) / (max_v - min_v) for value in values]
+
+
+def clamp_unit(value: float) -> float:
+    return max(0.0, min(1.0, value))
 
 
 def compute_retrieval_confidence(docs: List[RetrievedDocument]) -> float:
@@ -412,15 +416,23 @@ def build_diagnostic_perturbations(
     return perturbations
 
 
-def build_fixed_candidate_perturbations(docs: List[RetrievedDocument]) -> List[List[RetrievedDocument]]:
+def build_fixed_candidate_perturbations(
+    docs: List[RetrievedDocument],
+    replacement_candidates: Optional[List[RetrievedDocument]] = None,
+) -> List[List[RetrievedDocument]]:
     if len(docs) <= 2:
         return [list(reversed(docs))] if len(docs) > 1 else []
     fixed_candidate = docs[-1]
     base_docs = docs[:-1]
-    return [
-        list(reversed(base_docs)) + [fixed_candidate],
-        base_docs[1:] + base_docs[:1] + [fixed_candidate],
-    ]
+    perturbations = [list(reversed(base_docs)) + [fixed_candidate]]
+    if replacement_candidates:
+        used_ids = {doc.doc_id for doc in docs}
+        replacement = next((doc for doc in replacement_candidates if doc.doc_id not in used_ids), None)
+        if replacement is not None:
+            perturbations.append(base_docs[:-1] + [replacement, fixed_candidate])
+    if len(perturbations) == 1:
+        perturbations.append(base_docs[1:] + base_docs[:1] + [fixed_candidate])
+    return perturbations
 
 
 def compute_anchoring_consistency(
@@ -546,12 +558,12 @@ def extract_evidence_features(query: Query, docs: List[RetrievedDocument], aspec
 
     raw_scores = [doc.retrieval_score for doc in docs]
     normalized_scores = min_max_normalize(raw_scores)
-    relevance = mean(normalized_scores)
-    supportiveness = estimate_supportiveness(query, docs, normalized_scores)
+    relevance = clamp_unit(mean(normalized_scores))
+    supportiveness = clamp_unit(estimate_supportiveness(query, docs, normalized_scores))
 
     pairwise_sims = compute_pairwise_similarities(docs)
-    redundancy = mean(pairwise_sims) if pairwise_sims else 0.0
-    coverage = estimate_coverage(query, docs, model_name=aspect_model)
+    redundancy = clamp_unit((mean(pairwise_sims) + 1.0) / 2.0) if pairwise_sims else 0.0
+    coverage = clamp_unit(estimate_coverage(query, docs, model_name=aspect_model))
 
     return EvidenceFeatures(
         relevance=relevance,
@@ -719,11 +731,12 @@ class StabilityAwareEvidenceSelector:
         candidate: RetrievedDocument,
         base_score: float,
         base_consistency: float,
+        replacement_candidates: Optional[List[RetrievedDocument]] = None,
     ) -> CandidateUtility:
         selected_docs = docs + [candidate]
         features = extract_evidence_features(query, selected_docs, aspect_model=self.aspect_model)
         post_score = self.estimator.predict(features).sufficiency_score
-        perturbations = build_fixed_candidate_perturbations(selected_docs)
+        perturbations = build_fixed_candidate_perturbations(selected_docs, replacement_candidates=replacement_candidates)
         post_consistency, _, _ = compute_anchoring_consistency(
             query,
             selected_docs,
@@ -856,22 +869,52 @@ class StabilityAwareEvidenceSelector:
         if selection_strategy == "random":
             digest = hashlib.sha1(query.text.encode("utf-8")).hexdigest()
             selected = candidates[int(digest, 16) % len(candidates)]
-            selected_utility = self._candidate_utility(query, initial_docs, selected, decision.sufficiency_score, consistency)
+            replacements = [candidate for candidate in candidates if candidate.doc_id != selected.doc_id]
+            selected_utility = self._candidate_utility(
+                query,
+                initial_docs,
+                selected,
+                decision.sufficiency_score,
+                consistency,
+                replacement_candidates=replacements,
+            )
             utilities = [selected_utility]
         elif selection_strategy == "next_ranked":
             selected = candidates[0]
-            selected_utility = self._candidate_utility(query, initial_docs, selected, decision.sufficiency_score, consistency)
+            replacements = [candidate for candidate in candidates if candidate.doc_id != selected.doc_id]
+            selected_utility = self._candidate_utility(
+                query,
+                initial_docs,
+                selected,
+                decision.sufficiency_score,
+                consistency,
+                replacement_candidates=replacements,
+            )
             utilities = [selected_utility]
         elif selection_strategy == "oracle":
             utilities = [
-                self._candidate_utility(query, initial_docs, candidate, decision.sufficiency_score, consistency)
+                self._candidate_utility(
+                    query,
+                    initial_docs,
+                    candidate,
+                    decision.sufficiency_score,
+                    consistency,
+                    replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
+                )
                 for candidate in candidates
             ]
             selected_utility = max(utilities, key=lambda item: item.delta_consistency)
             selected = next(candidate for candidate in candidates if candidate.doc_id == selected_utility.candidate_doc_id)
         else:
             utilities = [
-                self._candidate_utility(query, initial_docs, candidate, decision.sufficiency_score, consistency)
+                self._candidate_utility(
+                    query,
+                    initial_docs,
+                    candidate,
+                    decision.sufficiency_score,
+                    consistency,
+                    replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
+                )
                 for candidate in candidates
             ]
             selected_utility = max(utilities, key=lambda item: item.utility)

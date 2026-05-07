@@ -16,6 +16,7 @@ class ProposedSelectPolicy(EvidencePolicy):
         candidate: RetrievedDocument,
         f_score: float,
         c_score: float,
+        replacement_candidates: list[RetrievedDocument] | None = None,
     ) -> CandidateScore:
         return score_candidate(
             query,
@@ -29,6 +30,7 @@ class ProposedSelectPolicy(EvidencePolicy):
             beta=self.context.utility_beta,
             rho=self.context.utility_rho,
             aspect_model=self.context.aspect_model,
+            replacement_candidates=replacement_candidates,
         )
 
     def choose_candidate(
@@ -39,7 +41,23 @@ class ProposedSelectPolicy(EvidencePolicy):
         f_score: float,
         c_score: float,
     ) -> PolicyDecision:
-        scores = [self.score_one(query, docs, candidate, f_score, c_score) for candidate in candidates]
+        scores = [
+            score_candidate(
+                query,
+                docs,
+                candidate,
+                self.context.generator,
+                self.context.estimator,
+                base_f_score=f_score,
+                base_c_score=c_score,
+                alpha=self.context.utility_alpha,
+                beta=self.context.utility_beta,
+                rho=self.context.utility_rho,
+                aspect_model=self.context.aspect_model,
+                replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
+            )
+            for candidate in candidates
+        ]
         selected = max(scores, key=lambda item: item.utility)
         return PolicyDecision(
             action="SELECT",
