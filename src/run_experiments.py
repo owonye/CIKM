@@ -378,7 +378,8 @@ def main() -> None:
                         "vanilla_rag,fixed_large_k_rag,confidence_adaptive_rag,"
                         "structure_aware_adaptive_rag,diagnose_then_expand,"
                         "random_selection,next_ranked_selection,stability_aware_selection,"
-                        "oracle_best_candidate"
+                        "oracle_best_candidate,selection_delta_f_only,selection_delta_c_only,"
+                        "selection_no_redundancy"
                     ),
                 ]
             )

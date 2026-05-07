@@ -40,6 +40,9 @@ VALID_BASELINES = {
     "next_ranked_selection",
     "stability_aware_selection",
     "oracle_best_candidate",
+    "selection_delta_f_only",
+    "selection_delta_c_only",
+    "selection_no_redundancy",
 }
 
 
@@ -768,13 +771,16 @@ def main() -> None:
             row["calibration_source"] = calibration_source
             rows.append(row)
         stability_baselines = {
-            "diagnose_then_expand": "diagnose_then_expand",
-            "random_selection": "random",
-            "next_ranked_selection": "next_ranked",
-            "stability_aware_selection": "utility",
-            "oracle_best_candidate": "oracle",
+            "diagnose_then_expand": ("diagnose_then_expand", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "random_selection": ("random", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "next_ranked_selection": ("next_ranked", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "stability_aware_selection": ("utility", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "oracle_best_candidate": ("oracle", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "selection_delta_f_only": ("utility", 1.0, 0.0, 0.0),
+            "selection_delta_c_only": ("utility", 0.0, 1.0, 0.0),
+            "selection_no_redundancy": ("utility", args.utility_alpha, args.utility_beta, 0.0),
         }
-        for baseline_name, strategy in stability_baselines.items():
+        for baseline_name, (strategy, utility_alpha, utility_beta, utility_rho) in stability_baselines.items():
             if baseline_name not in selected_baselines:
                 continue
             row = add_metrics(
@@ -787,9 +793,9 @@ def main() -> None:
                     expanded_k=args.expanded_k,
                     candidate_pool_k=args.candidate_pool_k,
                     stability_threshold=args.stability_threshold,
-                    utility_alpha=args.utility_alpha,
-                    utility_beta=args.utility_beta,
-                    utility_rho=args.utility_rho,
+                    utility_alpha=utility_alpha,
+                    utility_beta=utility_beta,
+                    utility_rho=utility_rho,
                     aspect_model=feature_aspect_model,
                     baseline_name=baseline_name,
                     selection_strategy=strategy,

@@ -208,7 +208,7 @@ python src/evaluate.py \
   --confidence-calibration-file "$HOTPOT_DIR"/confidence_calib_hotpotqa_1000.json \
   --stability-calibration-file "$HOTPOT_DIR"/stability_calib_hotpotqa_1000.json \
   --use-openai \
-  --baselines vanilla_rag,fixed_large_k_rag,structure_aware_adaptive_rag,diagnose_then_expand,random_selection,next_ranked_selection,stability_aware_selection,oracle_best_candidate \
+  --baselines vanilla_rag,fixed_large_k_rag,structure_aware_adaptive_rag,diagnose_then_expand,random_selection,next_ranked_selection,stability_aware_selection,selection_delta_f_only,selection_delta_c_only,selection_no_redundancy,oracle_best_candidate \
   --candidate-pool-k 8 \
   --output "$HOTPOT_DIR"/eval_hotpotqa_1000_stability.csv
 

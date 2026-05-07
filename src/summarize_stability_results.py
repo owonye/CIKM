@@ -115,6 +115,9 @@ def summarize_repair(rows: list[dict[str, str]], dataset: str) -> list[dict[str,
         "random_selection",
         "next_ranked_selection",
         "stability_aware_selection",
+        "selection_delta_f_only",
+        "selection_delta_c_only",
+        "selection_no_redundancy",
         "oracle_best_candidate",
     ]:
         group = [
@@ -190,6 +193,192 @@ def summarize_rank_corr(rows: list[dict[str, str]], dataset: str) -> list[dict[s
     return output
 
 
+def row_by_baseline(rows: list[dict[str, object]], baseline: str) -> dict[str, object] | None:
+    for row in rows:
+        if row.get("baseline") == baseline:
+            return row
+    return None
+
+
+def as_float(value: object) -> float:
+    if value in {"", None}:
+        return 0.0
+    return float(value)
+
+
+def validate_result_pattern(
+    dataset: str,
+    sbu_rows: list[dict[str, object]],
+    repair_rows: list[dict[str, object]],
+    end_to_end_rows: list[dict[str, object]],
+    min_sbu_rate: float,
+    target_sbu_low: float,
+    target_sbu_high: float,
+    min_recovery_gain: float,
+    max_f1_drop: float,
+) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = []
+    sbu = row_by_baseline(sbu_rows, "stability_aware_selection")
+    proposed_repair = row_by_baseline(repair_rows, "stability_aware_selection")
+    expand_repair = row_by_baseline(repair_rows, "diagnose_then_expand")
+    next_repair = row_by_baseline(repair_rows, "next_ranked_selection")
+    proposed_main = row_by_baseline(end_to_end_rows, "stability_aware_selection")
+    sufficiency_main = row_by_baseline(end_to_end_rows, "structure_aware_adaptive_rag")
+    delta_f_repair = row_by_baseline(repair_rows, "selection_delta_f_only")
+    delta_c_repair = row_by_baseline(repair_rows, "selection_delta_c_only")
+    no_redundancy_repair = row_by_baseline(repair_rows, "selection_no_redundancy")
+
+    if sbu is not None:
+        sbu_rate = as_float(sbu.get("sbu_rate_among_stop_cases"))
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "sbu_non_trivial",
+                "status": "pass" if sbu_rate >= min_sbu_rate else "weak",
+                "value": sbu_rate,
+                "threshold": min_sbu_rate,
+                "message": "SBU is frequent enough to support the core claim."
+                if sbu_rate >= min_sbu_rate
+                else "SBU is rare; the core claim is weak.",
+            }
+        )
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "sbu_target_range",
+                "status": "pass" if target_sbu_low <= sbu_rate <= target_sbu_high else "watch",
+                "value": sbu_rate,
+                "threshold": f"{target_sbu_low}-{target_sbu_high}",
+                "message": "SBU rate is in the preferred dataset-specific range."
+                if target_sbu_low <= sbu_rate <= target_sbu_high
+                else "SBU rate is outside the preferred range; inspect gamma/tau and perturbations.",
+            }
+        )
+
+    if proposed_repair is not None and expand_repair is not None:
+        proposed_recovery = as_float(proposed_repair.get("recovery_rate"))
+        expand_recovery = as_float(expand_repair.get("recovery_rate"))
+        recovery_gain = proposed_recovery - expand_recovery
+        proposed_delta_c = as_float(proposed_repair.get("delta_consistency"))
+        expand_delta_c = as_float(expand_repair.get("delta_consistency"))
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "beats_diagnose_expand_recovery",
+                "status": "pass" if recovery_gain >= min_recovery_gain else "weak",
+                "value": recovery_gain,
+                "threshold": min_recovery_gain,
+                "message": "Proposed selection repairs instability better than naive expansion."
+                if recovery_gain >= min_recovery_gain
+                else "Diagnose->expand is too close to proposed; selection novelty is weak.",
+            }
+        )
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "beats_diagnose_expand_delta_c",
+                "status": "pass" if proposed_delta_c > expand_delta_c else "weak",
+                "value": proposed_delta_c - expand_delta_c,
+                "threshold": ">0",
+                "message": "Proposed selection improves consistency more than naive expansion."
+                if proposed_delta_c > expand_delta_c
+                else "Proposed selection does not improve Delta C over naive expansion.",
+            }
+        )
+
+    if proposed_repair is not None and next_repair is not None:
+        proposed_recovery = as_float(proposed_repair.get("recovery_rate"))
+        next_recovery = as_float(next_repair.get("recovery_rate"))
+        proposed_delta_c = as_float(proposed_repair.get("delta_consistency"))
+        next_delta_c = as_float(next_repair.get("delta_consistency"))
+        proposed_var = as_float(proposed_repair.get("answer_variance_proxy"))
+        next_var = as_float(next_repair.get("answer_variance_proxy"))
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "beats_next_ranked",
+                "status": "pass" if proposed_recovery > next_recovery and proposed_delta_c > next_delta_c and proposed_var < next_var else "weak",
+                "value": {
+                    "recovery_gain": proposed_recovery - next_recovery,
+                    "delta_c_gain": proposed_delta_c - next_delta_c,
+                    "variance_reduction": next_var - proposed_var,
+                },
+                "threshold": "all improvements > 0",
+                "message": "Utility-based selection beats next-ranked selection."
+                if proposed_recovery > next_recovery and proposed_delta_c > next_delta_c and proposed_var < next_var
+                else "Next-ranked is too close to proposed; utility module is not clearly justified.",
+            }
+        )
+
+    if proposed_main is not None and sufficiency_main is not None:
+        proposed_f1 = as_float(proposed_main.get("f1"))
+        sufficiency_f1 = as_float(sufficiency_main.get("f1"))
+        f1_delta = proposed_f1 - sufficiency_f1
+        proposed_consistency = as_float(proposed_main.get("consistency"))
+        sufficiency_consistency = as_float(sufficiency_main.get("consistency"))
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "quality_preserved",
+                "status": "pass" if f1_delta >= -max_f1_drop else "weak",
+                "value": f1_delta,
+                "threshold": f">= {-max_f1_drop}",
+                "message": "F1 is roughly preserved."
+                if f1_delta >= -max_f1_drop
+                else "F1 drops too much; stability gains may not be acceptable.",
+            }
+        )
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "end_to_end_consistency_gain",
+                "status": "pass" if proposed_consistency > sufficiency_consistency else "weak",
+                "value": proposed_consistency - sufficiency_consistency,
+                "threshold": ">0",
+                "message": "End-to-end consistency improves over sufficiency-only stopping."
+                if proposed_consistency > sufficiency_consistency
+                else "End-to-end consistency does not improve over sufficiency-only stopping.",
+            }
+        )
+
+    ablation_rows = [row for row in [delta_f_repair, delta_c_repair, no_redundancy_repair] if row is not None]
+    if proposed_repair is not None and ablation_rows:
+        proposed_recovery = as_float(proposed_repair.get("recovery_rate"))
+        proposed_delta_c = as_float(proposed_repair.get("delta_consistency"))
+        best_ablation_recovery = max(as_float(row.get("recovery_rate")) for row in ablation_rows)
+        best_ablation_delta_c = max(as_float(row.get("delta_consistency")) for row in ablation_rows)
+        checks.append(
+            {
+                "dataset": dataset,
+                "check": "beats_utility_ablations",
+                "status": "pass" if proposed_recovery >= best_ablation_recovery and proposed_delta_c >= best_ablation_delta_c else "weak",
+                "value": {
+                    "recovery_gain_vs_best_ablation": proposed_recovery - best_ablation_recovery,
+                    "delta_c_gain_vs_best_ablation": proposed_delta_c - best_ablation_delta_c,
+                },
+                "threshold": ">=0 against best component ablation",
+                "message": "Full robust marginal value is justified over component-only utilities."
+                if proposed_recovery >= best_ablation_recovery and proposed_delta_c >= best_ablation_delta_c
+                else "A utility ablation matches or beats the full utility; robust marginal value is weakly justified.",
+            }
+        )
+
+    weak_count = sum(1 for check in checks if check["status"] == "weak")
+    checks.append(
+        {
+            "dataset": dataset,
+            "check": "overall",
+            "status": "pass" if weak_count == 0 else "weak",
+            "value": weak_count,
+            "threshold": 0,
+            "message": "The run matches the intended paper result pattern."
+            if weak_count == 0
+            else "The run is weak for the paper claim; inspect failed checks before using these results.",
+        }
+    )
+    return checks
+
+
 def write_examples(rows: list[dict[str, str]], output_path: Path, limit: int = 50) -> None:
     examples = [
         row
@@ -208,6 +397,9 @@ def main() -> None:
     parser.add_argument("--input", required=True)
     parser.add_argument("--dataset", default="unknown")
     parser.add_argument("--output-dir", default="")
+    parser.add_argument("--min-sbu-rate", type=float, default=0.15)
+    parser.add_argument("--min-recovery-gain", type=float, default=0.10)
+    parser.add_argument("--max-f1-drop", type=float, default=0.02)
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -219,6 +411,23 @@ def main() -> None:
     repair_rows = summarize_repair(rows, args.dataset)
     end_to_end_rows = summarize_end_to_end(rows, args.dataset)
     rank_corr_rows = summarize_rank_corr(rows, args.dataset)
+    if args.dataset == "hotpotqa":
+        target_sbu_low, target_sbu_high = 0.20, 0.40
+    elif args.dataset == "nq":
+        target_sbu_low, target_sbu_high = 0.10, 0.25
+    else:
+        target_sbu_low, target_sbu_high = args.min_sbu_rate, 1.0
+    pattern_checks = validate_result_pattern(
+        args.dataset,
+        sbu_rows,
+        repair_rows,
+        end_to_end_rows,
+        min_sbu_rate=args.min_sbu_rate,
+        target_sbu_low=target_sbu_low,
+        target_sbu_high=target_sbu_high,
+        min_recovery_gain=args.min_recovery_gain,
+        max_f1_drop=args.max_f1_drop,
+    )
 
     write_csv(
         output_dir / f"{stem}_sbu_summary.csv",
@@ -314,6 +523,15 @@ def main() -> None:
         output_dir / "candidate_rank_corr.csv",
         rank_corr_rows,
         ["dataset", "baseline", "queries_with_candidate_rankings", "utility_gain_spearman"],
+    )
+    write_csv(
+        output_dir / "result_pattern_check.csv",
+        pattern_checks,
+        ["dataset", "check", "status", "value", "threshold", "message"],
+    )
+    (output_dir / "result_pattern_check.json").write_text(
+        json.dumps(pattern_checks, indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
     write_examples(rows, output_dir / "examples_sbu.jsonl")
 
