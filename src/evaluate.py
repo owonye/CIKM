@@ -439,6 +439,7 @@ def run_structure_aware(
     expanded_k: int = 5,
     aspect_model: str = "BAAI/bge-small-en-v1.5",
     baseline_name: str = "structure_aware_adaptive_rag",
+    sufficiency_scorer=None,
 ) -> dict[str, Any]:
     pipeline = StructureAwareAdaptiveRAG(
         retriever=retriever,
@@ -447,6 +448,7 @@ def run_structure_aware(
         initial_k=initial_k,
         expanded_k=expanded_k,
         aspect_model=aspect_model,
+        sufficiency_scorer=sufficiency_scorer,
     )
     result = pipeline.answer(query)
     retrieval_calls = 1 if result["decision"] == "answer_now" else 2
@@ -540,6 +542,7 @@ def run_stability_aware_selection(
 
 def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    serialized_rows = []
     with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
@@ -599,6 +602,71 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
             if isinstance(row.get("candidate_details"), list):
                 row["candidate_details"] = json.dumps(row["candidate_details"], ensure_ascii=False)
             writer.writerow(row)
+            serialized_rows.append(row)
+
+    unstable_path = output_path.with_name(f"{output_path.stem}_unstable_only{output_path.suffix}")
+    unstable_rows = [row for row in serialized_rows if row.get("reason") == "sufficient_but_unstable"]
+    if serialized_rows:
+        with unstable_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(serialized_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(unstable_rows)
+
+    candidate_path = output_path.with_name(f"{output_path.stem}_candidates{output_path.suffix}")
+    candidate_rows: list[dict[str, Any]] = []
+    candidate_fieldnames = [
+        "query_id",
+        "query_uid",
+        "dataset_query",
+        "baseline",
+        "candidate_rank",
+        "candidate_doc_id",
+        "delta_f",
+        "delta_c",
+        "redundancy",
+        "utility",
+        "post_consistency",
+        "selected",
+        "action",
+        "is_sbu",
+    ]
+    for row in serialized_rows:
+        raw_details = row.get("candidate_details", "")
+        if not raw_details:
+            continue
+        try:
+            details = json.loads(raw_details)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(details, list):
+            continue
+        for rank, detail in enumerate(details, start=1):
+            candidate_rows.append(
+                {
+                    "query_id": row.get("query_id"),
+                    "query_uid": row.get("query_uid"),
+                    "dataset_query": row.get("query"),
+                    "baseline": row.get("baseline"),
+                    "candidate_rank": rank,
+                    "candidate_doc_id": detail.get("candidate_doc_id"),
+                    "delta_f": detail.get("delta_sufficiency"),
+                    "delta_c": detail.get("delta_consistency"),
+                    "redundancy": detail.get("redundancy_penalty"),
+                    "utility": detail.get("utility"),
+                    "post_consistency": detail.get("post_consistency"),
+                    "selected": detail.get("candidate_doc_id") == row.get("selected_doc_id"),
+                    "action": row.get("decision"),
+                    "is_sbu": row.get("reason") == "sufficient_but_unstable",
+                }
+            )
+    if serialized_rows:
+        with candidate_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=candidate_fieldnames,
+            )
+            writer.writeheader()
+            writer.writerows(candidate_rows)
 
 
 def main() -> None:
@@ -766,6 +834,7 @@ def main() -> None:
                     expanded_k=args.expanded_k,
                     aspect_model=feature_aspect_model,
                     baseline_name=structure_aware_name,
+                    sufficiency_scorer=shared_sufficiency_scorer,
                 ),
                 query,
                 generator_type=generator_type,

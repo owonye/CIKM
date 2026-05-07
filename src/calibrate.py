@@ -19,13 +19,13 @@ from rag.pipeline import (
     compute_query_overlap,
     compute_retrieval_confidence,
     embed_corpus_texts,
-    extract_evidence_features,
     GENERATOR_PROMPT_VERSION,
     load_hotpotqa_queries,
     load_hotpotqa_sample,
     load_nq_queries,
     load_nq_sample,
 )
+from scoring.sufficiency import LightweightSufficiencyScorer, SufficiencyWeights
 
 
 def build_resources(
@@ -186,7 +186,11 @@ def label_from_evidence(
 ):
     initial_docs = retriever.retrieve(query, initial_k)
     expanded_docs = retriever.retrieve(query, expanded_k)
-    initial_features = extract_evidence_features(query, initial_docs, aspect_model=embedding_model)
+    scorer = LightweightSufficiencyScorer(
+        SufficiencyWeights(0.0, 0.0, 0.0, 0.0),
+        aspect_model=embedding_model,
+    )
+    initial_features = scorer.score_components(query, initial_docs).to_features()
     initial_correct = evidence_has_weak_support(query, initial_docs, overlap_threshold=overlap_threshold)
     expanded_correct = evidence_has_weak_support(query, expanded_docs, overlap_threshold=overlap_threshold)
     return initial_features, build_silver_label(initial_correct, expanded_correct)
@@ -203,7 +207,11 @@ def label_from_hybrid_generation(
 ):
     initial_docs = retriever.retrieve(query, initial_k)
     expanded_docs = retriever.retrieve(query, expanded_k)
-    initial_features = extract_evidence_features(query, initial_docs, aspect_model=embedding_model)
+    scorer = LightweightSufficiencyScorer(
+        SufficiencyWeights(0.0, 0.0, 0.0, 0.0),
+        aspect_model=embedding_model,
+    )
+    initial_features = scorer.score_components(query, initial_docs).to_features()
     initial_support = evidence_has_weak_support(query, initial_docs, overlap_threshold=overlap_threshold)
     expanded_support = evidence_has_weak_support(query, expanded_docs, overlap_threshold=overlap_threshold)
 

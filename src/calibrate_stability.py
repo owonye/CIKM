@@ -14,8 +14,8 @@ from rag.pipeline import (
     StabilityAwareEvidenceSelector,
     build_diagnostic_perturbations,
     compute_anchoring_consistency,
-    extract_evidence_features,
 )
+from scoring.sufficiency import LightweightSufficiencyScorer
 
 
 def parse_float_grid(raw: str) -> list[float]:
@@ -53,6 +53,10 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
     _, queries, retriever, _, generator = build_resources(args)
     estimator, _, calibration_config = load_estimator(args)
     feature_aspect_model = "" if args.mode == "demo" else args.embedding_model
+    shared_sufficiency_scorer = LightweightSufficiencyScorer.from_estimator(
+        estimator,
+        aspect_model=feature_aspect_model,
+    )
 
     records: list[dict[str, Any]] = []
     insufficient_count = 0
@@ -63,7 +67,7 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
         pool = retriever.retrieve(query, top_k=args.candidate_pool_k)
         initial_docs = pool[: args.initial_k]
         candidates = pool[args.initial_k : args.candidate_pool_k]
-        features = extract_evidence_features(query, initial_docs, aspect_model=feature_aspect_model)
+        features = shared_sufficiency_scorer.score_components(query, initial_docs).to_features()
         decision = estimator.predict(features)
         if not decision.sufficient:
             insufficient_count += 1
@@ -90,6 +94,7 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
             candidate_pool_k=args.candidate_pool_k,
             stability_threshold=args.stability_threshold,
             aspect_model=feature_aspect_model,
+            sufficiency_scorer=shared_sufficiency_scorer,
         )
         candidate_rows = [
             selector._candidate_utility(query, initial_docs, candidate, decision.sufficiency_score, consistency)
