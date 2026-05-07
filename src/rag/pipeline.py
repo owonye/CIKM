@@ -10,6 +10,7 @@ from itertools import islice
 from pathlib import Path
 from statistics import mean
 from typing import List, Optional, Protocol
+from typing import Any
 
 import numpy as np
 
@@ -649,6 +650,7 @@ class StructureAwareAdaptiveRAG:
         initial_k: int = 3,
         expanded_k: int = 5,
         aspect_model: str = "BAAI/bge-small-en-v1.5",
+        sufficiency_scorer: Optional[Any] = None,
     ) -> None:
         self.retriever = retriever
         self.generator = generator
@@ -656,11 +658,18 @@ class StructureAwareAdaptiveRAG:
         self.initial_k = initial_k
         self.expanded_k = expanded_k
         self.aspect_model = aspect_model
+        self.sufficiency_scorer = sufficiency_scorer
+
+    def _score_initial(self, query: Query, docs: List[RetrievedDocument]) -> DecisionResult:
+        if self.sufficiency_scorer is not None:
+            features = self.sufficiency_scorer.score_components(query, docs).to_features()
+        else:
+            features = extract_evidence_features(query, docs, aspect_model=self.aspect_model)
+        return self.estimator.predict(features)
 
     def answer(self, query: Query) -> dict:
         initial_docs = self.retriever.retrieve(query, top_k=self.initial_k)
-        initial_features = extract_evidence_features(query, initial_docs, aspect_model=self.aspect_model)
-        decision = self.estimator.predict(initial_features)
+        decision = self._score_initial(query, initial_docs)
 
         if decision.sufficient:
             answer = self.generator.generate(query, initial_docs)
@@ -711,6 +720,7 @@ class StabilityAwareEvidenceSelector:
         utility_beta: float = 0.6,
         utility_rho: float = 0.1,
         aspect_model: str = "BAAI/bge-small-en-v1.5",
+        sufficiency_scorer: Optional[Any] = None,
     ) -> None:
         self.retriever = retriever
         self.generator = generator
@@ -723,6 +733,14 @@ class StabilityAwareEvidenceSelector:
         self.utility_beta = utility_beta
         self.utility_rho = utility_rho
         self.aspect_model = aspect_model
+        self.sufficiency_scorer = sufficiency_scorer
+
+    def _predict_sufficiency(self, query: Query, docs: List[RetrievedDocument]) -> DecisionResult:
+        if self.sufficiency_scorer is not None:
+            features = self.sufficiency_scorer.score_components(query, docs).to_features()
+        else:
+            features = extract_evidence_features(query, docs, aspect_model=self.aspect_model)
+        return self.estimator.predict(features)
 
     def _candidate_utility(
         self,
@@ -734,8 +752,7 @@ class StabilityAwareEvidenceSelector:
         replacement_candidates: Optional[List[RetrievedDocument]] = None,
     ) -> CandidateUtility:
         selected_docs = docs + [candidate]
-        features = extract_evidence_features(query, selected_docs, aspect_model=self.aspect_model)
-        post_score = self.estimator.predict(features).sufficiency_score
+        post_score = self._predict_sufficiency(query, selected_docs).sufficiency_score
         perturbations = build_fixed_candidate_perturbations(selected_docs, replacement_candidates=replacement_candidates)
         post_consistency, _, _ = compute_anchoring_consistency(
             query,
@@ -764,8 +781,7 @@ class StabilityAwareEvidenceSelector:
         pool = self.retriever.retrieve(query, top_k=self.candidate_pool_k)
         initial_docs = pool[: self.initial_k]
         candidates = pool[self.initial_k : self.candidate_pool_k]
-        initial_features = extract_evidence_features(query, initial_docs, aspect_model=self.aspect_model)
-        decision = self.estimator.predict(initial_features)
+        decision = self._predict_sufficiency(query, initial_docs)
 
         if not decision.sufficient:
             expanded_docs = pool[: self.expanded_k]

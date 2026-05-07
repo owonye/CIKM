@@ -28,6 +28,7 @@ from rag.pipeline import (
     load_nq_queries,
     load_nq_sample,
 )
+from scoring.sufficiency import LightweightSufficiencyScorer
 
 
 VALID_BASELINES = {
@@ -486,6 +487,7 @@ def run_stability_aware_selection(
     aspect_model: str = "BAAI/bge-small-en-v1.5",
     baseline_name: str = "stability_aware_selection",
     selection_strategy: str = "utility",
+    sufficiency_scorer=None,
 ) -> dict[str, Any]:
     pipeline = StabilityAwareEvidenceSelector(
         retriever=retriever,
@@ -499,6 +501,7 @@ def run_stability_aware_selection(
         utility_beta=utility_beta,
         utility_rho=utility_rho,
         aspect_model=aspect_model,
+        sufficiency_scorer=sufficiency_scorer,
     )
     result = pipeline.answer(query, selection_strategy=selection_strategy)
     retrieval_calls = 1 if result["decision"] in {"answer_now", "select_evidence"} else 2
@@ -679,6 +682,10 @@ def main() -> None:
     calibration_source = Path(args.calibration_file).name if args.calibration_file else "default"
     label_strategy = calibration_config.get("label_strategy", "default")
     feature_aspect_model = "" if args.mode == "demo" else args.embedding_model
+    shared_sufficiency_scorer = LightweightSufficiencyScorer.from_estimator(
+        estimator,
+        aspect_model=feature_aspect_model,
+    )
 
     rows: list[dict[str, Any]] = []
     total_queries = len(queries)
@@ -800,6 +807,7 @@ def main() -> None:
                     aspect_model=feature_aspect_model,
                     baseline_name=baseline_name,
                     selection_strategy=strategy,
+                    sufficiency_scorer=shared_sufficiency_scorer,
                 ),
                 query,
                 generator_type=generator_type,

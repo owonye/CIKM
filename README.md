@@ -192,6 +192,8 @@ The script reports:
 
 For the CIKM follow-up setting, `evaluate.py` can additionally run stability-aware baselines that diagnose sufficient-but-unstable evidence and select a targeted repair passage:
 
+Sufficiency scoring is implemented as a deterministic lightweight STAR-style pipeline in `src/scoring/sufficiency.py`. `LightweightSufficiencyScorer` returns `relevance`, `coverage`, `supportiveness`, and `redundancy` components in `[0,1]`, applies the calibrated STAR weights, and is shared across the stability-aware baselines during evaluation.
+
 ```bash
 python src/calibrate_stability.py \
   --mode hotpotqa \
