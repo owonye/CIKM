@@ -16,8 +16,12 @@ from rag.pipeline import (
     embed_corpus_texts,
     load_hotpotqa_queries,
     load_hotpotqa_sample,
+    load_musique_queries,
+    load_musique_sample,
     load_nq_queries,
     load_nq_sample,
+    load_triviaqa_queries,
+    load_triviaqa_sample,
 )
 
 
@@ -46,11 +50,21 @@ def build_pipeline(args: argparse.Namespace) -> tuple[StructureAwareAdaptiveRAG,
         corpus = build_demo_corpus()
         retriever = SimpleRetriever(corpus)
         query = Query("When is the birthday of Michael Phelps?")
-    elif args.mode == "hotpotqa":
-        raw_docs = load_hotpotqa_sample(start=args.doc_start, limit=args.doc_limit, split=args.corpus_split)
+    elif args.mode in {"hotpotqa", "musique", "triviaqa"}:
+        sample_loaders = {
+            "hotpotqa": load_hotpotqa_sample,
+            "musique": load_musique_sample,
+            "triviaqa": load_triviaqa_sample,
+        }
+        query_loaders = {
+            "hotpotqa": load_hotpotqa_queries,
+            "musique": load_musique_queries,
+            "triviaqa": load_triviaqa_queries,
+        }
+        raw_docs = sample_loaders[args.mode](start=args.doc_start, limit=args.doc_limit, split=args.corpus_split)
         corpus = embed_corpus_texts(raw_docs, model_name=args.embedding_model)
         retriever = FaissRetriever(corpus, model_name=args.embedding_model)
-        queries = load_hotpotqa_queries(start=args.query_start, limit=args.query_limit, split=args.query_split)
+        queries = query_loaders[args.mode](start=args.query_start, limit=args.query_limit, split=args.query_split)
         query = queries[0]
     else:
         raw_docs = load_nq_sample(
@@ -88,7 +102,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["demo", "hotpotqa", "nq"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "hotpotqa", "musique", "nq", "triviaqa"], default="demo")
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
     parser.add_argument("--embedding-model", default="BAAI/bge-small-en-v1.5")

@@ -1,0 +1,5 @@
+dataset: triviaqa
+corpus_split: validation
+query_split: validation
+query_limit: 1000
+expanded_k: 5

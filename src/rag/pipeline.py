@@ -73,6 +73,10 @@ class CandidateUtility:
     delta_consistency: float
     redundancy_penalty: float
     post_consistency: float
+    anchor_deficit_reduction: float = 0.0
+    base_anchor_deficit: float = 0.0
+    post_anchor_deficit: float = 0.0
+    feasible: bool = True
 
 
 class SimpleRetriever:
@@ -357,6 +361,21 @@ def answer_f1(answer_a: str, answer_b: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
+def lower_tail_mean(scores: List[float], tail_level: float = 1.0) -> float:
+    if not scores:
+        return 1.0
+    eta = max(0.0, min(1.0, tail_level))
+    if eta <= 0.0:
+        eta = 1.0 / len(scores)
+    sorted_scores = sorted(scores)
+    tail_count = max(1, int(np.ceil(eta * len(sorted_scores))))
+    return mean(sorted_scores[:tail_count])
+
+
+def anchor_deficit(consistency: float, threshold: float) -> float:
+    return max(threshold - consistency, 0.0)
+
+
 def min_max_normalize(values: List[float]) -> List[float]:
     if not values:
         return []
@@ -441,13 +460,15 @@ def compute_anchoring_consistency(
     docs: List[RetrievedDocument],
     generator: Generator,
     perturbations: List[List[RetrievedDocument]],
+    tail_level: float = 1.0,
+    reference_answer: Optional[str] = None,
 ) -> tuple[float, int, str]:
     if not perturbations:
-        answer = generator.generate(query, docs)
+        answer = reference_answer if reference_answer is not None else generator.generate(query, docs)
         return 1.0, 0, answer
-    base_answer = generator.generate(query, docs)
+    base_answer = reference_answer if reference_answer is not None else generator.generate(query, docs)
     scores = [answer_f1(base_answer, generator.generate(query, perturbed_docs)) for perturbed_docs in perturbations]
-    return mean(scores) if scores else 1.0, len(scores), base_answer
+    return lower_tail_mean(scores, tail_level=tail_level), len(scores), base_answer
 
 
 def extract_content_tokens(text: str) -> List[str]:
@@ -719,6 +740,9 @@ class StabilityAwareEvidenceSelector:
         utility_alpha: float = 0.3,
         utility_beta: float = 0.6,
         utility_rho: float = 0.1,
+        tail_level: float = 1.0,
+        sufficiency_tolerance: float = 0.0,
+        enforce_sufficiency_filter: bool = True,
         aspect_model: str = "BAAI/bge-small-en-v1.5",
         sufficiency_scorer: Optional[Any] = None,
     ) -> None:
@@ -732,6 +756,9 @@ class StabilityAwareEvidenceSelector:
         self.utility_alpha = utility_alpha
         self.utility_beta = utility_beta
         self.utility_rho = utility_rho
+        self.tail_level = tail_level
+        self.sufficiency_tolerance = sufficiency_tolerance
+        self.enforce_sufficiency_filter = enforce_sufficiency_filter
         self.aspect_model = aspect_model
         self.sufficiency_scorer = sufficiency_scorer
 
@@ -749,6 +776,7 @@ class StabilityAwareEvidenceSelector:
         candidate: RetrievedDocument,
         base_score: float,
         base_consistency: float,
+        base_answer: Optional[str] = None,
         replacement_candidates: Optional[List[RetrievedDocument]] = None,
     ) -> CandidateUtility:
         selected_docs = docs + [candidate]
@@ -759,15 +787,17 @@ class StabilityAwareEvidenceSelector:
             selected_docs,
             self.generator,
             perturbations,
+            tail_level=self.tail_level,
+            reference_answer=base_answer,
         )
         delta_sufficiency = post_score - base_score
         delta_consistency = post_consistency - base_consistency
         redundancy_penalty = compute_lexical_redundancy(candidate, docs)
-        utility = (
-            self.utility_alpha * delta_sufficiency
-            + self.utility_beta * delta_consistency
-            - self.utility_rho * redundancy_penalty
-        )
+        base_deficit = anchor_deficit(base_consistency, self.stability_threshold)
+        post_deficit = anchor_deficit(post_consistency, self.stability_threshold)
+        deficit_reduction = base_deficit - post_deficit
+        feasible = post_score >= self.estimator.threshold - self.sufficiency_tolerance
+        utility = deficit_reduction - self.utility_rho * redundancy_penalty
         return CandidateUtility(
             candidate_doc_id=candidate.doc_id,
             utility=utility,
@@ -775,6 +805,10 @@ class StabilityAwareEvidenceSelector:
             delta_consistency=delta_consistency,
             redundancy_penalty=redundancy_penalty,
             post_consistency=post_consistency,
+            anchor_deficit_reduction=deficit_reduction,
+            base_anchor_deficit=base_deficit,
+            post_anchor_deficit=post_deficit,
+            feasible=feasible,
         )
 
     def answer(self, query: Query, selection_strategy: str = "utility") -> dict:
@@ -809,6 +843,9 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
                 "candidate_details": [],
+                "anchor_deficit_reduction": None,
+                "tail_level": self.tail_level,
+                "sufficiency_tolerance": self.sufficiency_tolerance,
                 "answer": answer,
             }
 
@@ -818,6 +855,7 @@ class StabilityAwareEvidenceSelector:
             initial_docs,
             self.generator,
             perturbations,
+            tail_level=self.tail_level,
         )
         if consistency >= self.stability_threshold or not candidates:
             return {
@@ -843,6 +881,9 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
                 "candidate_details": [],
+                "anchor_deficit_reduction": 0.0,
+                "tail_level": self.tail_level,
+                "sufficiency_tolerance": self.sufficiency_tolerance,
                 "answer": base_answer,
             }
 
@@ -854,7 +895,10 @@ class StabilityAwareEvidenceSelector:
                 final_docs,
                 self.generator,
                 post_perturbations,
+                tail_level=self.tail_level,
             )
+            base_deficit = anchor_deficit(consistency, self.stability_threshold)
+            post_deficit = anchor_deficit(post_consistency, self.stability_threshold)
             return {
                 "query": query.text,
                 "decision": "retrieve_more",
@@ -878,6 +922,9 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
                 "candidate_details": [],
+                "anchor_deficit_reduction": base_deficit - post_deficit,
+                "tail_level": self.tail_level,
+                "sufficiency_tolerance": self.sufficiency_tolerance,
                 "answer": answer,
             }
 
@@ -892,6 +939,7 @@ class StabilityAwareEvidenceSelector:
                 selected,
                 decision.sufficiency_score,
                 consistency,
+                base_answer=base_answer,
                 replacement_candidates=replacements,
             )
             utilities = [selected_utility]
@@ -904,6 +952,7 @@ class StabilityAwareEvidenceSelector:
                 selected,
                 decision.sufficiency_score,
                 consistency,
+                base_answer=base_answer,
                 replacement_candidates=replacements,
             )
             utilities = [selected_utility]
@@ -915,11 +964,58 @@ class StabilityAwareEvidenceSelector:
                     candidate,
                     decision.sufficiency_score,
                     consistency,
+                    base_answer=base_answer,
                     replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
                 )
                 for candidate in candidates
             ]
-            selected_utility = max(utilities, key=lambda item: item.delta_consistency)
+            feasible_utilities = [item for item in utilities if item.feasible] if self.enforce_sufficiency_filter else utilities
+            if not feasible_utilities:
+                final_docs = pool[: self.expanded_k]
+                answer = self.generator.generate(query, final_docs)
+                return {
+                    "query": query.text,
+                    "decision": "retrieve_more",
+                    "reason": "no_sufficiency_preserving_candidate",
+                    "used_docs": [doc.doc_id for doc in final_docs],
+                    "initial_doc_ids": [doc.doc_id for doc in initial_docs],
+                    "final_doc_ids": [doc.doc_id for doc in final_docs],
+                    "expanded_doc_ids": [doc.doc_id for doc in final_docs],
+                    "selected_doc_id": None,
+                    "expansion_triggered": True,
+                    "final_doc_count": len(final_docs),
+                    "features": decision.features,
+                    "sufficiency_score": decision.sufficiency_score,
+                    "anchoring_consistency": consistency,
+                    "post_selection_consistency": None,
+                    "stability_gain": None,
+                    "recovered": None,
+                    "diagnostic_generations": diagnostic_generations + 2 * len(candidates),
+                    "candidate_utility": None,
+                    "candidate_delta_sufficiency": None,
+                    "candidate_delta_consistency": None,
+                    "candidate_redundancy_penalty": None,
+                    "candidate_details": [
+                        {
+                            "candidate_doc_id": item.candidate_doc_id,
+                            "utility": item.utility,
+                            "delta_sufficiency": item.delta_sufficiency,
+                            "delta_consistency": item.delta_consistency,
+                            "redundancy_penalty": item.redundancy_penalty,
+                            "post_consistency": item.post_consistency,
+                            "anchor_deficit_reduction": item.anchor_deficit_reduction,
+                            "base_anchor_deficit": item.base_anchor_deficit,
+                            "post_anchor_deficit": item.post_anchor_deficit,
+                            "feasible": item.feasible,
+                        }
+                        for item in utilities
+                    ],
+                    "anchor_deficit_reduction": None,
+                    "tail_level": self.tail_level,
+                    "sufficiency_tolerance": self.sufficiency_tolerance,
+                    "answer": answer,
+                }
+            selected_utility = max(feasible_utilities, key=lambda item: item.anchor_deficit_reduction)
             selected = next(candidate for candidate in candidates if candidate.doc_id == selected_utility.candidate_doc_id)
         else:
             utilities = [
@@ -929,11 +1025,58 @@ class StabilityAwareEvidenceSelector:
                     candidate,
                     decision.sufficiency_score,
                     consistency,
+                    base_answer=base_answer,
                     replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
                 )
                 for candidate in candidates
             ]
-            selected_utility = max(utilities, key=lambda item: item.utility)
+            feasible_utilities = [item for item in utilities if item.feasible] if self.enforce_sufficiency_filter else utilities
+            if not feasible_utilities:
+                final_docs = pool[: self.expanded_k]
+                answer = self.generator.generate(query, final_docs)
+                return {
+                    "query": query.text,
+                    "decision": "retrieve_more",
+                    "reason": "no_sufficiency_preserving_candidate",
+                    "used_docs": [doc.doc_id for doc in final_docs],
+                    "initial_doc_ids": [doc.doc_id for doc in initial_docs],
+                    "final_doc_ids": [doc.doc_id for doc in final_docs],
+                    "expanded_doc_ids": [doc.doc_id for doc in final_docs],
+                    "selected_doc_id": None,
+                    "expansion_triggered": True,
+                    "final_doc_count": len(final_docs),
+                    "features": decision.features,
+                    "sufficiency_score": decision.sufficiency_score,
+                    "anchoring_consistency": consistency,
+                    "post_selection_consistency": None,
+                    "stability_gain": None,
+                    "recovered": None,
+                    "diagnostic_generations": diagnostic_generations + 2 * len(candidates),
+                    "candidate_utility": None,
+                    "candidate_delta_sufficiency": None,
+                    "candidate_delta_consistency": None,
+                    "candidate_redundancy_penalty": None,
+                    "candidate_details": [
+                        {
+                            "candidate_doc_id": item.candidate_doc_id,
+                            "utility": item.utility,
+                            "delta_sufficiency": item.delta_sufficiency,
+                            "delta_consistency": item.delta_consistency,
+                            "redundancy_penalty": item.redundancy_penalty,
+                            "post_consistency": item.post_consistency,
+                            "anchor_deficit_reduction": item.anchor_deficit_reduction,
+                            "base_anchor_deficit": item.base_anchor_deficit,
+                            "post_anchor_deficit": item.post_anchor_deficit,
+                            "feasible": item.feasible,
+                        }
+                        for item in utilities
+                    ],
+                    "anchor_deficit_reduction": None,
+                    "tail_level": self.tail_level,
+                    "sufficiency_tolerance": self.sufficiency_tolerance,
+                    "answer": answer,
+                }
+            selected_utility = max(feasible_utilities, key=lambda item: item.utility)
             selected = next(candidate for candidate in candidates if candidate.doc_id == selected_utility.candidate_doc_id)
 
         final_docs = initial_docs + [selected]
@@ -961,6 +1104,9 @@ class StabilityAwareEvidenceSelector:
             "candidate_delta_sufficiency": selected_utility.delta_sufficiency,
             "candidate_delta_consistency": selected_utility.delta_consistency,
             "candidate_redundancy_penalty": selected_utility.redundancy_penalty,
+            "anchor_deficit_reduction": selected_utility.anchor_deficit_reduction,
+            "tail_level": self.tail_level,
+            "sufficiency_tolerance": self.sufficiency_tolerance,
             "candidate_details": [
                 {
                     "candidate_doc_id": item.candidate_doc_id,
@@ -969,6 +1115,10 @@ class StabilityAwareEvidenceSelector:
                     "delta_consistency": item.delta_consistency,
                     "redundancy_penalty": item.redundancy_penalty,
                     "post_consistency": item.post_consistency,
+                    "anchor_deficit_reduction": item.anchor_deficit_reduction,
+                    "base_anchor_deficit": item.base_anchor_deficit,
+                    "post_anchor_deficit": item.post_anchor_deficit,
+                    "feasible": item.feasible,
                 }
                 for item in utilities
             ],
@@ -1106,6 +1256,175 @@ def load_hotpotqa_queries(start: int = 0, limit: int = 5, split: str = "validati
         query_uid = f"hotpotqa::{split}::{start + local_idx}"
         queries.append(Query(text=item["question"], answer=item["answer"], answers=[item["answer"]], query_id=query_uid))
     return queries
+
+
+def _string_answer(raw_answer: Any) -> str:
+    if isinstance(raw_answer, str):
+        return raw_answer
+    if isinstance(raw_answer, dict):
+        for key in ("value", "normalized_value", "answer", "text"):
+            value = raw_answer.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        aliases = raw_answer.get("aliases")
+        if isinstance(aliases, list) and aliases:
+            return str(aliases[0])
+    if isinstance(raw_answer, list) and raw_answer:
+        return _string_answer(raw_answer[0])
+    return ""
+
+
+def _load_dataset_first(candidates: List[tuple], split_expr: str):
+    from datasets import load_dataset
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            return load_dataset(*candidate, split=split_expr)
+        except Exception as exc:  # pragma: no cover - depends on optional HF datasets
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise ValueError("No dataset candidates provided.")
+
+
+def _iter_text_contexts(item: dict) -> List[tuple[str, str]]:
+    contexts: List[tuple[str, str]] = []
+
+    def add(title: Any, text: Any) -> None:
+        text_value = ""
+        if isinstance(text, list):
+            text_value = " ".join(str(part) for part in text if str(part).strip())
+        elif text is not None:
+            text_value = str(text)
+        if text_value.strip():
+            contexts.append((str(title or "passage"), text_value.strip()))
+
+    for key in ("paragraphs", "contexts", "context"):
+        raw = item.get(key)
+        if isinstance(raw, list):
+            for idx, entry in enumerate(raw):
+                if isinstance(entry, dict):
+                    title = entry.get("title") or entry.get("heading") or entry.get("id") or f"passage_{idx}"
+                    text = (
+                        entry.get("paragraph_text")
+                        or entry.get("text")
+                        or entry.get("passage")
+                        or entry.get("sentences")
+                        or entry.get("context")
+                    )
+                    add(title, text)
+                else:
+                    add(f"passage_{idx}", entry)
+        elif isinstance(raw, dict):
+            titles = raw.get("title") or raw.get("titles")
+            sentences = raw.get("sentences") or raw.get("text") or raw.get("texts")
+            if isinstance(titles, list) and isinstance(sentences, list):
+                for idx, (title, sentence_list) in enumerate(zip(titles, sentences)):
+                    add(title or f"passage_{idx}", sentence_list)
+
+    for key in ("search_results", "entity_pages"):
+        raw = item.get(key)
+        if isinstance(raw, list):
+            for idx, entry in enumerate(raw):
+                if not isinstance(entry, dict):
+                    continue
+                title = entry.get("title") or entry.get("url") or f"passage_{idx}"
+                text = entry.get("search_context") or entry.get("description") or entry.get("text")
+                add(title, text)
+
+    return contexts
+
+
+def _load_open_qa_sample(
+    dataset_name: str,
+    dataset_candidates: List[tuple],
+    start: int,
+    limit: int,
+    split: str,
+) -> List[dict]:
+    dataset = _load_dataset_first(dataset_candidates, f"{split}[{start}:{start + limit}]")
+    raw_docs: List[dict] = []
+    seen_ids = set()
+    for item_idx, item in enumerate(dataset):
+        absolute_item_idx = start + item_idx
+        for passage_idx, (title, text) in enumerate(_iter_text_contexts(dict(item))):
+            normalized_title = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "passage"
+            doc_id = f"{dataset_name}::{split}::{absolute_item_idx}::{passage_idx}::{normalized_title}"
+            if doc_id in seen_ids:
+                continue
+            seen_ids.add(doc_id)
+            raw_docs.append({"doc_id": doc_id, "text": f"{title}. {text}"})
+    return raw_docs
+
+
+def _load_open_qa_queries(
+    dataset_name: str,
+    dataset_candidates: List[tuple],
+    start: int,
+    limit: int,
+    split: str,
+) -> List[Query]:
+    dataset = _load_dataset_first(dataset_candidates, f"{split}[{start}:{start + limit}]")
+    queries: List[Query] = []
+    for local_idx, item in enumerate(dataset):
+        item = dict(item)
+        answer = _string_answer(item.get("answer") or item.get("answers"))
+        aliases = []
+        raw_answer = item.get("answer") or item.get("answers")
+        if isinstance(raw_answer, dict) and isinstance(raw_answer.get("aliases"), list):
+            aliases = [str(alias) for alias in raw_answer["aliases"] if str(alias).strip()]
+        answers = [answer] + [alias for alias in aliases if alias != answer]
+        query_uid = f"{dataset_name}::{split}::{start + local_idx}"
+        queries.append(
+            Query(
+                text=str(item.get("question", "")),
+                answer=answer,
+                answers=[value for value in answers if value],
+                query_id=query_uid,
+            )
+        )
+    return queries
+
+
+def load_musique_sample(start: int = 0, limit: int = 50, split: str = "validation") -> List[dict]:
+    return _load_open_qa_sample(
+        "musique",
+        [("dgslibisey/MuSiQue",), ("Salesforce/musique",), ("musique",)],
+        start,
+        limit,
+        split,
+    )
+
+
+def load_musique_queries(start: int = 0, limit: int = 5, split: str = "validation") -> List[Query]:
+    return _load_open_qa_queries(
+        "musique",
+        [("dgslibisey/MuSiQue",), ("Salesforce/musique",), ("musique",)],
+        start,
+        limit,
+        split,
+    )
+
+
+def load_triviaqa_sample(start: int = 0, limit: int = 50, split: str = "validation") -> List[dict]:
+    return _load_open_qa_sample(
+        "triviaqa",
+        [("trivia_qa", "rc.nocontext"), ("trivia_qa", "rc")],
+        start,
+        limit,
+        split,
+    )
+
+
+def load_triviaqa_queries(start: int = 0, limit: int = 5, split: str = "validation") -> List[Query]:
+    return _load_open_qa_queries(
+        "triviaqa",
+        [("trivia_qa", "rc.nocontext"), ("trivia_qa", "rc")],
+        start,
+        limit,
+        split,
+    )
 
 
 def _extract_nq_document_tokens(item: dict) -> List[str]:

@@ -61,7 +61,7 @@ def build_run_subdir_name(args: argparse.Namespace, sizes: list[int]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["hotpotqa", "nq"], required=True)
+    parser.add_argument("--mode", choices=["hotpotqa", "musique", "nq", "triviaqa"], required=True)
     parser.add_argument("--sizes", default="100,300,1000")
     parser.add_argument("--doc-start", type=int, default=0)
     parser.add_argument("--doc-limit", type=int, default=20000)
@@ -77,6 +77,8 @@ def main() -> None:
     parser.add_argument("--run-stability-selection", action="store_true")
     parser.add_argument("--candidate-pool-k", type=int, default=8)
     parser.add_argument("--stability-threshold", type=float, default=0.8)
+    parser.add_argument("--tail-level", type=float, default=1.0)
+    parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
     parser.add_argument("--utility-alpha", type=float, default=0.3)
     parser.add_argument("--utility-beta", type=float, default=0.6)
     parser.add_argument("--utility-rho", type=float, default=0.1)
@@ -117,7 +119,8 @@ def main() -> None:
         args.query_split = "validation"
         args.corpus_split = args.query_split
         args.initial_k = 3
-        args.expanded_k = 8
+        args.expanded_k = 8 if args.mode in {"hotpotqa", "musique"} else 5
+        args.candidate_pool_k = 8
         args.label_strategy = "evidence"
 
     sizes = parse_sizes(args.sizes)
@@ -171,6 +174,8 @@ def main() -> None:
                 "expanded_k": args.expanded_k,
                 "candidate_pool_k": args.candidate_pool_k,
                 "stability_threshold": args.stability_threshold,
+                "tail_level": args.tail_level,
+                "sufficiency_tolerance": args.sufficiency_tolerance,
                 "utility_alpha": args.utility_alpha,
                 "utility_beta": args.utility_beta,
                 "utility_rho": args.utility_rho,
@@ -277,6 +282,10 @@ def main() -> None:
                 str(args.expanded_k),
                 "--candidate-pool-k",
                 str(args.candidate_pool_k),
+                "--tail-level",
+                str(args.tail_level),
+                "--sufficiency-tolerance",
+                str(args.sufficiency_tolerance),
                 "--weak-support-overlap-threshold",
                 str(args.weak_support_overlap_threshold),
                 "--seed",
@@ -335,6 +344,10 @@ def main() -> None:
             str(args.candidate_pool_k),
             "--stability-threshold",
             str(args.stability_threshold),
+            "--tail-level",
+            str(args.tail_level),
+            "--sufficiency-tolerance",
+            str(args.sufficiency_tolerance),
             "--utility-alpha",
             str(args.utility_alpha),
             "--utility-beta",
@@ -378,7 +391,7 @@ def main() -> None:
                         "vanilla_rag,fixed_large_k_rag,confidence_adaptive_rag,"
                         "structure_aware_adaptive_rag,diagnose_then_expand,"
                         "random_selection,next_ranked_selection,stability_aware_selection,"
-                        "oracle_best_candidate,selection_delta_f_only,selection_delta_c_only,"
+                        "oracle_best_candidate,selection_mean_consistency,selection_no_filter,"
                         "selection_no_redundancy"
                     ),
                 ]

@@ -25,8 +25,12 @@ from rag.pipeline import (
     embed_corpus_texts,
     load_hotpotqa_queries,
     load_hotpotqa_sample,
+    load_musique_queries,
+    load_musique_sample,
     load_nq_queries,
     load_nq_sample,
+    load_triviaqa_queries,
+    load_triviaqa_sample,
 )
 from scoring.sufficiency import LightweightSufficiencyScorer
 
@@ -44,6 +48,8 @@ VALID_BASELINES = {
     "selection_delta_f_only",
     "selection_delta_c_only",
     "selection_no_redundancy",
+    "selection_mean_consistency",
+    "selection_no_filter",
 }
 
 
@@ -63,16 +69,26 @@ def build_resources(args: argparse.Namespace):
         queries = [Query("When is the birthday of Michael Phelps?", answer="June 30, 1985", answers=["June 30, 1985"])]
         simple_retriever = SimpleRetriever(corpus)
         faiss_retriever = simple_retriever
-    elif args.mode == "hotpotqa":
-        raw_docs = load_hotpotqa_sample(start=args.doc_start, limit=args.doc_limit, split=args.corpus_split)
-        cache_namespace = f"hotpotqa::{args.corpus_split}::{args.doc_start}:{args.doc_start + args.doc_limit}"
+    elif args.mode in {"hotpotqa", "musique", "triviaqa"}:
+        sample_loaders = {
+            "hotpotqa": load_hotpotqa_sample,
+            "musique": load_musique_sample,
+            "triviaqa": load_triviaqa_sample,
+        }
+        query_loaders = {
+            "hotpotqa": load_hotpotqa_queries,
+            "musique": load_musique_queries,
+            "triviaqa": load_triviaqa_queries,
+        }
+        raw_docs = sample_loaders[args.mode](start=args.doc_start, limit=args.doc_limit, split=args.corpus_split)
+        cache_namespace = f"{args.mode}::{args.corpus_split}::{args.doc_start}:{args.doc_start + args.doc_limit}"
         corpus = embed_corpus_texts(
             raw_docs,
             model_name=args.embedding_model,
             cache_dir=args.retrieval_cache_dir,
             cache_namespace=cache_namespace,
         )
-        queries = load_hotpotqa_queries(start=args.query_start, limit=args.query_limit, split=args.query_split)
+        queries = query_loaders[args.mode](start=args.query_start, limit=args.query_limit, split=args.query_split)
         simple_retriever = FaissRetriever(
             corpus,
             model_name=args.embedding_model,
@@ -137,6 +153,8 @@ def resolve_manifest_overrides(args: argparse.Namespace) -> argparse.Namespace:
     args.expanded_k = int(manifest["expanded_k"])
     args.candidate_pool_k = int(manifest.get("candidate_pool_k", args.candidate_pool_k))
     args.stability_threshold = float(manifest.get("stability_threshold", args.stability_threshold))
+    args.tail_level = float(manifest.get("tail_level", args.tail_level))
+    args.sufficiency_tolerance = float(manifest.get("sufficiency_tolerance", args.sufficiency_tolerance))
     args.utility_alpha = float(manifest.get("utility_alpha", args.utility_alpha))
     args.utility_beta = float(manifest.get("utility_beta", args.utility_beta))
     args.utility_rho = float(manifest.get("utility_rho", args.utility_rho))
@@ -313,8 +331,10 @@ def apply_stability_calibration(args: argparse.Namespace) -> argparse.Namespace:
     config = json.loads(calibration_path.read_text(encoding="utf-8"))
     best = config.get("best", config)
     args.stability_threshold = float(best["stability_threshold"])
-    args.utility_alpha = float(best["utility_alpha"])
-    args.utility_beta = float(best["utility_beta"])
+    args.tail_level = float(best.get("tail_level", args.tail_level))
+    args.sufficiency_tolerance = float(best.get("sufficiency_tolerance", args.sufficiency_tolerance))
+    args.utility_alpha = float(best.get("utility_alpha", args.utility_alpha))
+    args.utility_beta = float(best.get("utility_beta", args.utility_beta))
     args.utility_rho = float(best["utility_rho"])
     return args
 
@@ -486,6 +506,9 @@ def run_stability_aware_selection(
     utility_alpha: float = 0.3,
     utility_beta: float = 0.6,
     utility_rho: float = 0.1,
+    tail_level: float = 1.0,
+    sufficiency_tolerance: float = 0.0,
+    enforce_sufficiency_filter: bool = True,
     aspect_model: str = "BAAI/bge-small-en-v1.5",
     baseline_name: str = "stability_aware_selection",
     selection_strategy: str = "utility",
@@ -502,6 +525,9 @@ def run_stability_aware_selection(
         utility_alpha=utility_alpha,
         utility_beta=utility_beta,
         utility_rho=utility_rho,
+        tail_level=tail_level,
+        sufficiency_tolerance=sufficiency_tolerance,
+        enforce_sufficiency_filter=enforce_sufficiency_filter,
         aspect_model=aspect_model,
         sufficiency_scorer=sufficiency_scorer,
     )
@@ -535,6 +561,9 @@ def run_stability_aware_selection(
         "candidate_delta_sufficiency": result["candidate_delta_sufficiency"],
         "candidate_delta_consistency": result["candidate_delta_consistency"],
         "candidate_redundancy_penalty": result["candidate_redundancy_penalty"],
+        "anchor_deficit_reduction": result["anchor_deficit_reduction"],
+        "tail_level": result["tail_level"],
+        "sufficiency_tolerance": result["sufficiency_tolerance"],
         "candidate_details": result["candidate_details"],
         "answer": result["answer"],
     }
@@ -578,6 +607,9 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
                 "candidate_delta_sufficiency",
                 "candidate_delta_consistency",
                 "candidate_redundancy_penalty",
+                "anchor_deficit_reduction",
+                "tail_level",
+                "sufficiency_tolerance",
                 "candidate_details",
                 "oracle_initial_support",
                 "oracle_expanded_support",
@@ -623,9 +655,13 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
         "candidate_doc_id",
         "delta_f",
         "delta_c",
+        "anchor_deficit_reduction",
+        "base_anchor_deficit",
+        "post_anchor_deficit",
         "redundancy",
         "utility",
         "post_consistency",
+        "feasible",
         "selected",
         "action",
         "is_sbu",
@@ -651,9 +687,13 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
                     "candidate_doc_id": detail.get("candidate_doc_id"),
                     "delta_f": detail.get("delta_sufficiency"),
                     "delta_c": detail.get("delta_consistency"),
+                    "anchor_deficit_reduction": detail.get("anchor_deficit_reduction"),
+                    "base_anchor_deficit": detail.get("base_anchor_deficit"),
+                    "post_anchor_deficit": detail.get("post_anchor_deficit"),
                     "redundancy": detail.get("redundancy_penalty"),
                     "utility": detail.get("utility"),
                     "post_consistency": detail.get("post_consistency"),
+                    "feasible": detail.get("feasible"),
                     "selected": detail.get("candidate_doc_id") == row.get("selected_doc_id"),
                     "action": row.get("decision"),
                     "is_sbu": row.get("reason") == "sufficient_but_unstable",
@@ -673,7 +713,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["demo", "hotpotqa", "nq"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "hotpotqa", "musique", "nq", "triviaqa"], default="demo")
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--allow-simple-generator", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
@@ -692,6 +732,8 @@ def main() -> None:
     parser.add_argument("--expanded-k", type=int, default=5)
     parser.add_argument("--candidate-pool-k", type=int, default=8)
     parser.add_argument("--stability-threshold", type=float, default=0.8)
+    parser.add_argument("--tail-level", type=float, default=1.0)
+    parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
     parser.add_argument("--utility-alpha", type=float, default=0.3)
     parser.add_argument("--utility-beta", type=float, default=0.6)
     parser.add_argument("--utility-rho", type=float, default=0.1)
@@ -856,6 +898,8 @@ def main() -> None:
             "selection_delta_f_only": ("utility", 1.0, 0.0, 0.0),
             "selection_delta_c_only": ("utility", 0.0, 1.0, 0.0),
             "selection_no_redundancy": ("utility", args.utility_alpha, args.utility_beta, 0.0),
+            "selection_mean_consistency": ("utility", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "selection_no_filter": ("utility", args.utility_alpha, args.utility_beta, args.utility_rho),
         }
         for baseline_name, (strategy, utility_alpha, utility_beta, utility_rho) in stability_baselines.items():
             if baseline_name not in selected_baselines:
@@ -873,6 +917,9 @@ def main() -> None:
                     utility_alpha=utility_alpha,
                     utility_beta=utility_beta,
                     utility_rho=utility_rho,
+                    tail_level=1.0 if baseline_name == "selection_mean_consistency" else args.tail_level,
+                    sufficiency_tolerance=args.sufficiency_tolerance,
+                    enforce_sufficiency_filter=baseline_name != "selection_no_filter",
                     aspect_model=feature_aspect_model,
                     baseline_name=baseline_name,
                     selection_strategy=strategy,

@@ -1,13 +1,7 @@
 ablations:
-  - name: delta_f_only
-    alpha: 1.0
-    beta: 0.0
-    rho: 0.0
-  - name: delta_c_only
-    alpha: 0.0
-    beta: 1.0
-    rho: 0.0
+  - name: mean_consistency
+    tail_level: 1.0
+  - name: no_filter
+    enforce_sufficiency_filter: false
   - name: no_redundancy
-    alpha: 0.3
-    beta: 0.6
     rho: 0.0

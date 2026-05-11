@@ -4,6 +4,7 @@ from rag.pipeline import (
     Query,
     RetrievedDocument,
     SufficiencyEstimator,
+    anchor_deficit,
     build_fixed_candidate_perturbations,
     compute_anchoring_consistency,
     compute_lexical_redundancy,
@@ -22,6 +23,9 @@ def score_candidate(
     alpha: float,
     beta: float,
     rho: float,
+    stability_threshold: float = 0.8,
+    tail_level: float = 1.0,
+    sufficiency_tolerance: float = 0.0,
     aspect_model: str = "BAAI/bge-small-en-v1.5",
     replacement_candidates: list[RetrievedDocument] | None = None,
 ) -> CandidateScore:
@@ -32,11 +36,24 @@ def score_candidate(
         selected_docs,
         replacement_candidates=replacement_candidates,
     )
-    post_c_score, _, _ = compute_anchoring_consistency(query, selected_docs, generator, perturbations)
+    post_c_score, _, _ = compute_anchoring_consistency(
+        query,
+        selected_docs,
+        generator,
+        perturbations,
+        tail_level=tail_level,
+    )
     delta_f = post_f_score - base_f_score
     delta_c = post_c_score - base_c_score
     redundancy = compute_lexical_redundancy(candidate, docs)
-    utility = alpha * delta_f + beta * delta_c - rho * redundancy
+    base_deficit = anchor_deficit(base_c_score, stability_threshold)
+    post_deficit = anchor_deficit(post_c_score, stability_threshold)
+    deficit_reduction = base_deficit - post_deficit
+    feasible = post_f_score >= estimator.threshold - sufficiency_tolerance
+    # alpha and beta are kept for backward-compatible callers. The current
+    # paper method defines utility by anchor-deficit reduction and redundancy.
+    _ = (alpha, beta)
+    utility = deficit_reduction - rho * redundancy
     return CandidateScore(
         doc_id=candidate.doc_id,
         delta_f=delta_f,
@@ -44,4 +61,8 @@ def score_candidate(
         redundancy=redundancy,
         utility=utility,
         post_consistency=post_c_score,
+        anchor_deficit_reduction=deficit_reduction,
+        base_anchor_deficit=base_deficit,
+        post_anchor_deficit=post_deficit,
+        feasible=feasible,
     )

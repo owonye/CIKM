@@ -22,8 +22,12 @@ from rag.pipeline import (
     GENERATOR_PROMPT_VERSION,
     load_hotpotqa_queries,
     load_hotpotqa_sample,
+    load_musique_queries,
+    load_musique_sample,
     load_nq_queries,
     load_nq_sample,
+    load_triviaqa_queries,
+    load_triviaqa_sample,
 )
 from scoring.sufficiency import LightweightSufficiencyScorer, SufficiencyWeights
 
@@ -47,16 +51,26 @@ def build_resources(
         retriever = SimpleRetriever(corpus)
         return queries, retriever
 
-    if mode == "hotpotqa":
-        raw_docs = load_hotpotqa_sample(start=doc_start, limit=doc_limit, split=corpus_split)
-        cache_namespace = f"hotpotqa::{corpus_split}::{doc_start}:{doc_start + doc_limit}"
+    if mode in {"hotpotqa", "musique", "triviaqa"}:
+        sample_loaders = {
+            "hotpotqa": load_hotpotqa_sample,
+            "musique": load_musique_sample,
+            "triviaqa": load_triviaqa_sample,
+        }
+        query_loaders = {
+            "hotpotqa": load_hotpotqa_queries,
+            "musique": load_musique_queries,
+            "triviaqa": load_triviaqa_queries,
+        }
+        raw_docs = sample_loaders[mode](start=doc_start, limit=doc_limit, split=corpus_split)
+        cache_namespace = f"{mode}::{corpus_split}::{doc_start}:{doc_start + doc_limit}"
         corpus = embed_corpus_texts(
             raw_docs,
             model_name=embedding_model,
             cache_dir=retrieval_cache_dir,
             cache_namespace=cache_namespace,
         )
-        queries = load_hotpotqa_queries(start=query_start, limit=query_limit, split=query_split)
+        queries = query_loaders[mode](start=query_start, limit=query_limit, split=query_split)
         retriever = FaissRetriever(
             corpus,
             model_name=embedding_model,
@@ -235,7 +249,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["demo", "hotpotqa", "nq"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "hotpotqa", "musique", "nq", "triviaqa"], default="demo")
     parser.add_argument("--embedding-model", default="BAAI/bge-small-en-v1.5")
     parser.add_argument("--doc-start", type=int, default=0)
     parser.add_argument("--doc-limit", type=int, default=20000)

@@ -82,7 +82,10 @@ def candidate_spearman(row: dict[str, str]) -> float | None:
     if not isinstance(details, list) or len(details) < 2:
         return None
     utilities = [safe_float(str(item.get("utility", ""))) for item in details]
-    gains = [safe_float(str(item.get("delta_consistency", ""))) for item in details]
+    gains = [
+        safe_float(str(item.get("anchor_deficit_reduction", item.get("delta_consistency", ""))))
+        for item in details
+    ]
     return spearman(utilities, gains)
 
 
@@ -115,8 +118,8 @@ def summarize_repair(rows: list[dict[str, str]], dataset: str) -> list[dict[str,
         "random_selection",
         "next_ranked_selection",
         "stability_aware_selection",
-        "selection_delta_f_only",
-        "selection_delta_c_only",
+        "selection_mean_consistency",
+        "selection_no_filter",
         "selection_no_redundancy",
         "oracle_best_candidate",
     ]:
@@ -132,6 +135,7 @@ def summarize_repair(rows: list[dict[str, str]], dataset: str) -> list[dict[str,
                 "dataset": dataset,
                 "baseline": baseline,
                 "unstable_cases": count,
+                "anchor_deficit_reduction": sum(safe_float(row.get("anchor_deficit_reduction")) for row in group) / max(count, 1),
                 "delta_consistency": sum(safe_float(row.get("stability_gain")) for row in group) / max(count, 1),
                 "recovery_rate": sum(1 for row in group if safe_bool(row.get("recovered"))) / max(count, 1),
                 "post_consistency": sum(safe_float(row.get("post_selection_consistency")) for row in group) / max(count, 1),
@@ -224,8 +228,8 @@ def validate_result_pattern(
     next_repair = row_by_baseline(repair_rows, "next_ranked_selection")
     proposed_main = row_by_baseline(end_to_end_rows, "stability_aware_selection")
     sufficiency_main = row_by_baseline(end_to_end_rows, "structure_aware_adaptive_rag")
-    delta_f_repair = row_by_baseline(repair_rows, "selection_delta_f_only")
-    delta_c_repair = row_by_baseline(repair_rows, "selection_delta_c_only")
+    mean_consistency_repair = row_by_baseline(repair_rows, "selection_mean_consistency")
+    no_filter_repair = row_by_baseline(repair_rows, "selection_no_filter")
     no_redundancy_repair = row_by_baseline(repair_rows, "selection_no_redundancy")
 
     if sbu is not None:
@@ -259,8 +263,8 @@ def validate_result_pattern(
         proposed_recovery = as_float(proposed_repair.get("recovery_rate"))
         expand_recovery = as_float(expand_repair.get("recovery_rate"))
         recovery_gain = proposed_recovery - expand_recovery
-        proposed_delta_c = as_float(proposed_repair.get("delta_consistency"))
-        expand_delta_c = as_float(expand_repair.get("delta_consistency"))
+        proposed_delta_c = as_float(proposed_repair.get("anchor_deficit_reduction"))
+        expand_delta_c = as_float(expand_repair.get("anchor_deficit_reduction"))
         checks.append(
             {
                 "dataset": dataset,
@@ -276,21 +280,21 @@ def validate_result_pattern(
         checks.append(
             {
                 "dataset": dataset,
-                "check": "beats_diagnose_expand_delta_c",
+                "check": "beats_diagnose_expand_deficit_reduction",
                 "status": "pass" if proposed_delta_c > expand_delta_c else "weak",
                 "value": proposed_delta_c - expand_delta_c,
                 "threshold": ">0",
-                "message": "Proposed selection improves consistency more than naive expansion."
+                "message": "Proposed selection reduces anchor deficit more than naive expansion."
                 if proposed_delta_c > expand_delta_c
-                else "Proposed selection does not improve Delta C over naive expansion.",
+                else "Proposed selection does not improve anchor-deficit reduction over naive expansion.",
             }
         )
 
     if proposed_repair is not None and next_repair is not None:
         proposed_recovery = as_float(proposed_repair.get("recovery_rate"))
         next_recovery = as_float(next_repair.get("recovery_rate"))
-        proposed_delta_c = as_float(proposed_repair.get("delta_consistency"))
-        next_delta_c = as_float(next_repair.get("delta_consistency"))
+        proposed_delta_c = as_float(proposed_repair.get("anchor_deficit_reduction"))
+        next_delta_c = as_float(next_repair.get("anchor_deficit_reduction"))
         proposed_var = as_float(proposed_repair.get("answer_variance_proxy"))
         next_var = as_float(next_repair.get("answer_variance_proxy"))
         checks.append(
@@ -300,7 +304,7 @@ def validate_result_pattern(
                 "status": "pass" if proposed_recovery > next_recovery and proposed_delta_c > next_delta_c and proposed_var < next_var else "weak",
                 "value": {
                     "recovery_gain": proposed_recovery - next_recovery,
-                    "delta_c_gain": proposed_delta_c - next_delta_c,
+                    "deficit_reduction_gain": proposed_delta_c - next_delta_c,
                     "variance_reduction": next_var - proposed_var,
                 },
                 "threshold": "all improvements > 0",
@@ -341,12 +345,12 @@ def validate_result_pattern(
             }
         )
 
-    ablation_rows = [row for row in [delta_f_repair, delta_c_repair, no_redundancy_repair] if row is not None]
+    ablation_rows = [row for row in [mean_consistency_repair, no_filter_repair, no_redundancy_repair] if row is not None]
     if proposed_repair is not None and ablation_rows:
         proposed_recovery = as_float(proposed_repair.get("recovery_rate"))
-        proposed_delta_c = as_float(proposed_repair.get("delta_consistency"))
+        proposed_delta_c = as_float(proposed_repair.get("anchor_deficit_reduction"))
         best_ablation_recovery = max(as_float(row.get("recovery_rate")) for row in ablation_rows)
-        best_ablation_delta_c = max(as_float(row.get("delta_consistency")) for row in ablation_rows)
+        best_ablation_delta_c = max(as_float(row.get("anchor_deficit_reduction")) for row in ablation_rows)
         checks.append(
             {
                 "dataset": dataset,
@@ -354,12 +358,12 @@ def validate_result_pattern(
                 "status": "pass" if proposed_recovery >= best_ablation_recovery and proposed_delta_c >= best_ablation_delta_c else "weak",
                 "value": {
                     "recovery_gain_vs_best_ablation": proposed_recovery - best_ablation_recovery,
-                    "delta_c_gain_vs_best_ablation": proposed_delta_c - best_ablation_delta_c,
+                    "deficit_reduction_gain_vs_best_ablation": proposed_delta_c - best_ablation_delta_c,
                 },
-                "threshold": ">=0 against best component ablation",
-                "message": "Full robust marginal value is justified over component-only utilities."
+                "threshold": ">=0 against best method ablation",
+                "message": "Full robust marginal value is justified over method ablations."
                 if proposed_recovery >= best_ablation_recovery and proposed_delta_c >= best_ablation_delta_c
-                else "A utility ablation matches or beats the full utility; robust marginal value is weakly justified.",
+                else "A method ablation matches or beats the full utility; robust marginal value is weakly justified.",
             }
         )
 
@@ -464,6 +468,7 @@ def main() -> None:
             "dataset",
             "baseline",
             "unstable_cases",
+            "anchor_deficit_reduction",
             "delta_consistency",
             "recovery_rate",
             "post_consistency",
@@ -479,6 +484,7 @@ def main() -> None:
             "dataset",
             "baseline",
             "unstable_cases",
+            "anchor_deficit_reduction",
             "delta_consistency",
             "recovery_rate",
             "post_consistency",

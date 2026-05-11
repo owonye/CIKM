@@ -2,9 +2,9 @@ seed: 42
 initial_k: 3
 candidate_pool_k: 8
 stability_threshold: 0.8
+tail_level: 1.0
+sufficiency_tolerance: 0.0
 utility:
-  alpha: 0.3
-  beta: 0.6
   rho: 0.1
 generator:
   model: gpt-4.1-mini

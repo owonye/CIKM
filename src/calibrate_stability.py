@@ -79,11 +79,12 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
             continue
 
         perturbations = build_diagnostic_perturbations(initial_docs, candidates)
-        consistency, diagnostic_generations, _ = compute_anchoring_consistency(
+        consistency, diagnostic_generations, base_answer = compute_anchoring_consistency(
             query,
             initial_docs,
             generator,
             perturbations,
+            tail_level=args.tail_level,
         )
         selector = StabilityAwareEvidenceSelector(
             retriever=retriever,
@@ -93,11 +94,21 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
             expanded_k=args.expanded_k,
             candidate_pool_k=args.candidate_pool_k,
             stability_threshold=args.stability_threshold,
+            tail_level=args.tail_level,
+            sufficiency_tolerance=args.sufficiency_tolerance,
+            enforce_sufficiency_filter=True,
             aspect_model=feature_aspect_model,
             sufficiency_scorer=shared_sufficiency_scorer,
         )
         candidate_rows = [
-            selector._candidate_utility(query, initial_docs, candidate, decision.sufficiency_score, consistency)
+            selector._candidate_utility(
+                query,
+                initial_docs,
+                candidate,
+                decision.sufficiency_score,
+                consistency,
+                base_answer=base_answer,
+            )
             for candidate in candidates
         ]
         records.append(
@@ -105,6 +116,7 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
                 "query_id": query.query_id,
                 "base_consistency": consistency,
                 "base_sufficiency": decision.sufficiency_score,
+                "threshold": estimator.threshold,
                 "diagnostic_generations": diagnostic_generations,
                 "candidates": candidate_rows,
             }
@@ -127,9 +139,8 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
 def evaluate_setting(
     records: list[dict[str, Any]],
     gamma: float,
-    alpha: float,
-    beta: float,
     rho: float,
+    sufficiency_tolerance: float,
 ) -> dict[str, Any]:
     stable_count = 0
     unstable_count = 0
@@ -148,13 +159,24 @@ def evaluate_setting(
 
         unstable_count += 1
         candidates = record["candidates"]
+        feasible_candidates = [
+            item
+            for item in candidates
+            if record["base_sufficiency"] + item.delta_sufficiency >= record["threshold"] - sufficiency_tolerance
+        ]
+        if not feasible_candidates:
+            post_consistency_sum += base_consistency
+            continue
+        base_deficit = max(gamma - base_consistency, 0.0)
         selected = max(
-            candidates,
-            key=lambda item: alpha * item.delta_sufficiency + beta * item.delta_consistency - rho * item.redundancy_penalty,
+            feasible_candidates,
+            key=lambda item: base_deficit - max(gamma - item.post_consistency, 0.0) - rho * item.redundancy_penalty,
         )
+        post_deficit = max(gamma - selected.post_consistency, 0.0)
+        utility = base_deficit - post_deficit - rho * selected.redundancy_penalty
         post_consistency_sum += selected.post_consistency
         stability_gain_sum += selected.delta_consistency
-        selected_utility_sum += alpha * selected.delta_sufficiency + beta * selected.delta_consistency - rho * selected.redundancy_penalty
+        selected_utility_sum += utility
         selected_redundancy_sum += selected.redundancy_penalty
         if selected.post_consistency >= gamma:
             recovered_count += 1
@@ -168,9 +190,8 @@ def evaluate_setting(
     objective = avg_post_consistency + 0.5 * recovery_rate - 0.05 * sbu_rate
     return {
         "stability_threshold": gamma,
-        "utility_alpha": alpha,
-        "utility_beta": beta,
         "utility_rho": rho,
+        "sufficiency_tolerance": sufficiency_tolerance,
         "objective": objective,
         "sufficient_with_candidates": len(records),
         "stable_count": stable_count,
@@ -189,7 +210,7 @@ def main() -> None:
     load_dotenv()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["demo", "hotpotqa", "nq"], default="demo")
+    parser.add_argument("--mode", choices=["demo", "hotpotqa", "musique", "nq", "triviaqa"], default="demo")
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--allow-simple-generator", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
@@ -208,6 +229,9 @@ def main() -> None:
     parser.add_argument("--expanded-k", type=int, default=8)
     parser.add_argument("--candidate-pool-k", type=int, default=8)
     parser.add_argument("--stability-threshold", type=float, default=0.8)
+    parser.add_argument("--tail-level", type=float, default=1.0)
+    parser.add_argument("--tail-grid", default="")
+    parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
     parser.add_argument("--weak-support-overlap-threshold", type=float, default=0.2)
     parser.add_argument("--confidence-threshold", type=float, default=0.88)
     parser.add_argument("--manifest-path", default="")
@@ -216,9 +240,8 @@ def main() -> None:
     parser.add_argument("--structure-aware-label", default="")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gamma-grid", default="0.6,0.7,0.8,0.9")
-    parser.add_argument("--alpha-grid", default="0.0,0.3,0.6")
-    parser.add_argument("--beta-grid", default="0.3,0.6,1.0")
     parser.add_argument("--rho-grid", default="0.0,0.1,0.2")
+    parser.add_argument("--epsilon-f-grid", default="0.0,0.02,0.05")
     parser.add_argument("--output", default="results/stability_calib.json")
     args = parser.parse_args()
     args = resolve_manifest_overrides(args)
@@ -226,24 +249,29 @@ def main() -> None:
         raise ValueError("Non-demo stability calibration requires --use-openai or --allow-simple-generator.")
     set_global_seed(args.seed)
 
-    records, metadata = build_candidate_records(args)
     gamma_grid = parse_float_grid(args.gamma_grid)
-    alpha_grid = parse_float_grid(args.alpha_grid)
-    beta_grid = parse_float_grid(args.beta_grid)
     rho_grid = parse_float_grid(args.rho_grid)
+    epsilon_f_grid = parse_float_grid(args.epsilon_f_grid)
+    tail_grid = parse_float_grid(args.tail_grid) if args.tail_grid else [args.tail_level]
 
     best = None
     all_results = []
-    for gamma, alpha, beta, rho in product(gamma_grid, alpha_grid, beta_grid, rho_grid):
-        result = evaluate_setting(records, gamma=gamma, alpha=alpha, beta=beta, rho=rho)
-        all_results.append(result)
-        if best is None or result["objective"] > best["objective"]:
-            best = result
+    metadata_by_tail: dict[str, Any] = {}
+    for tail_level in tail_grid:
+        args.tail_level = tail_level
+        records, metadata = build_candidate_records(args)
+        metadata_by_tail[str(tail_level)] = metadata
+        for gamma, rho, epsilon_f in product(gamma_grid, rho_grid, epsilon_f_grid):
+            result = evaluate_setting(records, gamma=gamma, rho=rho, sufficiency_tolerance=epsilon_f)
+            result["tail_level"] = tail_level
+            all_results.append(result)
+            if best is None or result["objective"] > best["objective"]:
+                best = result
 
     payload = {
         "best": best,
         "grid_results": all_results,
-        "metadata": metadata,
+        "metadata": metadata_by_tail,
         "args": vars(args),
         "prompt_template_version": GENERATOR_PROMPT_VERSION,
     }
@@ -255,7 +283,7 @@ def main() -> None:
         {
             "script": "calibrate_stability.py",
             "args": vars(args),
-            "metadata": metadata,
+            "metadata": metadata_by_tail,
             "best": best,
             "output": str(output_path),
         },

@@ -1,14 +1,15 @@
-# STAR: Structure-Aware Adaptive Retrieval for RAG
+# Stability-Aware Evidence Selection for RAG
 
-This repository contains the experimental code for **STAR**, a structure-aware adaptive retrieval controller for retrieval-augmented generation (RAG). STAR decides whether to answer from the initially retrieved evidence or perform one additional retrieval step by diagnosing the current evidence set with four lightweight signals:
+This repository contains the experimental code for the CIKM follow-up to STAR: a stability-aware evidence selection controller for retrieval-augmented generation (RAG). The code keeps the STAR-style deterministic sufficiency scorer, then adds a stability gate and targeted repair policy for sufficient-but-unstable evidence.
 
-- retrieval relevance
-- redundancy
-- coverage
-- supportiveness
+The main paper path evaluates whether:
 
-The main experiments compare STAR against Vanilla RAG, Fixed larger-k RAG, and a confidence-based adaptive retrieval baseline on HotpotQA and Natural Questions.
+- sufficient-but-unstable evidence occurs at non-trivial frequency
+- diagnose-then-expand is not enough to repair instability
+- targeted evidence selection beats random and next-ranked candidate selection
+- gains come from lower-tail anchoring consistency, sufficiency-preserving candidate filtering, and anchor-deficit reduction
 
+The benchmark suite is HotpotQA, MuSiQue, Natural Questions, and TriviaQA.
 ## Repository Layout
 
 ```text
@@ -39,7 +40,9 @@ scripts/
 configs/
   base.yaml
   hotpot.yaml
+  musique.yaml
   nq.yaml
+  triviaqa.yaml
   ablation.yaml
 
 assets/
@@ -82,6 +85,9 @@ The paper uses:
 - query split: `validation`
 - document slice: `doc_start=0`, `doc_limit=20000`
 - initial retrieval budget: `k_init=3`
+- candidate pool: `k_pool=8`
+- stability score: lower-tail anchoring consistency `C_eta`
+- candidate utility: anchor-deficit reduction minus redundancy
 - label strategy: `evidence`
 - seed: `42`
 
@@ -194,6 +200,12 @@ For the CIKM follow-up setting, `evaluate.py` can additionally run stability-awa
 
 Sufficiency scoring is implemented as a deterministic lightweight STAR-style pipeline in `src/scoring/sufficiency.py`. `LightweightSufficiencyScorer` returns `relevance`, `coverage`, `supportiveness`, and `redundancy` components in `[0,1]`, applies the calibrated STAR weights, and is shared across the stability-aware baselines during evaluation.
 
+Stability-aware selection uses lower-tail anchoring consistency, filters candidates by `F(D + c, q) >= tau - epsilon_F`, and ranks feasible candidates by anchor-deficit reduction:
+
+```text
+U(c | D, q) = ([gamma - C_eta(D, q)]_+ - [gamma - C_eta^+(D, c, q)]_+) - rho R(c, D)
+```
+
 ```bash
 python src/calibrate_stability.py \
   --mode hotpotqa \
@@ -210,7 +222,7 @@ python src/evaluate.py \
   --confidence-calibration-file "$HOTPOT_DIR"/confidence_calib_hotpotqa_1000.json \
   --stability-calibration-file "$HOTPOT_DIR"/stability_calib_hotpotqa_1000.json \
   --use-openai \
-  --baselines vanilla_rag,fixed_large_k_rag,structure_aware_adaptive_rag,diagnose_then_expand,random_selection,next_ranked_selection,stability_aware_selection,selection_delta_f_only,selection_delta_c_only,selection_no_redundancy,oracle_best_candidate \
+  --baselines vanilla_rag,fixed_large_k_rag,structure_aware_adaptive_rag,diagnose_then_expand,random_selection,next_ranked_selection,stability_aware_selection,selection_mean_consistency,selection_no_filter,selection_no_redundancy,oracle_best_candidate \
   --candidate-pool-k 8 \
   --output "$HOTPOT_DIR"/eval_hotpotqa_1000_stability.csv
 
@@ -219,7 +231,7 @@ python src/summarize_stability_results.py \
   --dataset hotpotqa
 ```
 
-The resulting CSV includes `anchoring_consistency`, `post_selection_consistency`, `stability_gain`, `recovered`, `diagnostic_generations`, `selected_doc_id`, robust marginal value components, and per-candidate details for ranking-quality analysis.
+The resulting CSV includes `anchoring_consistency`, `post_selection_consistency`, `anchor_deficit_reduction`, `recovered`, `diagnostic_generations`, `selected_doc_id`, feasibility flags, and per-candidate details for ranking-quality analysis.
 
 ## Regenerating the Quality-Cost Figure
 
