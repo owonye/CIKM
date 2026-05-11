@@ -25,12 +25,14 @@ def score_stability(
     docs: list[RetrievedDocument],
     generator: Generator,
     perturbations: list[list[RetrievedDocument]],
+    tail_level: float = 1.0,
 ) -> StabilityResult:
     consistency, diagnostic_generations, base_answer = compute_anchoring_consistency(
         query,
         docs,
         generator,
         perturbations,
+        tail_level=tail_level,
     )
     return StabilityResult(
         consistency=consistency,

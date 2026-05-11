@@ -16,7 +16,7 @@ STABILITY_BASELINES = {
 
 
 def safe_float(value: str | None) -> float:
-    if value is None or value == "":
+    if value is None or value == "" or str(value).lower() in {"none", "null"}:
         return 0.0
     return float(value)
 
@@ -81,10 +81,13 @@ def candidate_spearman(row: dict[str, str]) -> float | None:
         return None
     if not isinstance(details, list) or len(details) < 2:
         return None
-    utilities = [safe_float(str(item.get("utility", ""))) for item in details]
+    scored_details = [item for item in details if item.get("utility") is not None]
+    if len(scored_details) < 2:
+        return None
+    utilities = [safe_float(str(item.get("utility", ""))) for item in scored_details]
     gains = [
         safe_float(str(item.get("anchor_deficit_reduction", item.get("delta_consistency", ""))))
-        for item in details
+        for item in scored_details
     ]
     return spearman(utilities, gains)
 

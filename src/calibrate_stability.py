@@ -79,7 +79,7 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
             continue
 
         perturbations = build_diagnostic_perturbations(initial_docs, candidates)
-        consistency, diagnostic_generations, base_answer = compute_anchoring_consistency(
+        consistency, diagnostic_generations, _ = compute_anchoring_consistency(
             query,
             initial_docs,
             generator,
@@ -107,7 +107,6 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
                 candidate,
                 decision.sufficiency_score,
                 consistency,
-                base_answer=base_answer,
             )
             for candidate in candidates
         ]

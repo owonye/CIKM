@@ -776,7 +776,6 @@ class StabilityAwareEvidenceSelector:
         candidate: RetrievedDocument,
         base_score: float,
         base_consistency: float,
-        base_answer: Optional[str] = None,
         replacement_candidates: Optional[List[RetrievedDocument]] = None,
     ) -> CandidateUtility:
         selected_docs = docs + [candidate]
@@ -788,7 +787,6 @@ class StabilityAwareEvidenceSelector:
             self.generator,
             perturbations,
             tail_level=self.tail_level,
-            reference_answer=base_answer,
         )
         delta_sufficiency = post_score - base_score
         delta_consistency = post_consistency - base_consistency
@@ -810,6 +808,45 @@ class StabilityAwareEvidenceSelector:
             post_anchor_deficit=post_deficit,
             feasible=feasible,
         )
+
+    def _feasible_candidates(
+        self,
+        query: Query,
+        docs: List[RetrievedDocument],
+        candidates: List[RetrievedDocument],
+        base_score: float,
+    ) -> tuple[List[RetrievedDocument], dict[str, float]]:
+        post_scores: dict[str, float] = {}
+        feasible: List[RetrievedDocument] = []
+        for candidate in candidates:
+            post_score = self._predict_sufficiency(query, docs + [candidate]).sufficiency_score
+            post_scores[candidate.doc_id] = post_score
+            if post_score >= self.estimator.threshold - self.sufficiency_tolerance:
+                feasible.append(candidate)
+        _ = base_score
+        return feasible, post_scores
+
+    def _infeasible_candidate_details(
+        self,
+        candidates: List[RetrievedDocument],
+        post_scores: dict[str, float],
+        base_score: float,
+    ) -> List[dict]:
+        return [
+            {
+                "candidate_doc_id": candidate.doc_id,
+                "utility": None,
+                "delta_sufficiency": post_scores.get(candidate.doc_id, base_score) - base_score,
+                "delta_consistency": None,
+                "redundancy_penalty": None,
+                "post_consistency": None,
+                "anchor_deficit_reduction": None,
+                "base_anchor_deficit": None,
+                "post_anchor_deficit": None,
+                "feasible": False,
+            }
+            for candidate in candidates
+        ]
 
     def answer(self, query: Query, selection_strategy: str = "utility") -> dict:
         pool = self.retriever.retrieve(query, top_k=self.candidate_pool_k)
@@ -929,30 +966,76 @@ class StabilityAwareEvidenceSelector:
             }
 
         utilities: List[CandidateUtility]
+        eligible_candidates = candidates
+        infeasible_details: List[dict] = []
+        if self.enforce_sufficiency_filter:
+            eligible_candidates, post_scores = self._feasible_candidates(
+                query,
+                initial_docs,
+                candidates,
+                decision.sufficiency_score,
+            )
+            eligible_ids = {candidate.doc_id for candidate in eligible_candidates}
+            infeasible_candidates = [candidate for candidate in candidates if candidate.doc_id not in eligible_ids]
+            infeasible_details = self._infeasible_candidate_details(
+                infeasible_candidates,
+                post_scores,
+                decision.sufficiency_score,
+            )
+            if not eligible_candidates:
+                final_docs = pool[: self.expanded_k]
+                answer = self.generator.generate(query, final_docs)
+                return {
+                    "query": query.text,
+                    "decision": "retrieve_more",
+                    "reason": "no_sufficiency_preserving_candidate",
+                    "used_docs": [doc.doc_id for doc in final_docs],
+                    "initial_doc_ids": [doc.doc_id for doc in initial_docs],
+                    "final_doc_ids": [doc.doc_id for doc in final_docs],
+                    "expanded_doc_ids": [doc.doc_id for doc in final_docs],
+                    "selected_doc_id": None,
+                    "expansion_triggered": True,
+                    "final_doc_count": len(final_docs),
+                    "features": decision.features,
+                    "sufficiency_score": decision.sufficiency_score,
+                    "anchoring_consistency": consistency,
+                    "post_selection_consistency": None,
+                    "stability_gain": None,
+                    "recovered": None,
+                    "diagnostic_generations": diagnostic_generations,
+                    "candidate_utility": None,
+                    "candidate_delta_sufficiency": None,
+                    "candidate_delta_consistency": None,
+                    "candidate_redundancy_penalty": None,
+                    "candidate_details": infeasible_details,
+                    "anchor_deficit_reduction": None,
+                    "tail_level": self.tail_level,
+                    "sufficiency_tolerance": self.sufficiency_tolerance,
+                    "answer": answer,
+                }
+
         if selection_strategy == "random":
             digest = hashlib.sha1(query.text.encode("utf-8")).hexdigest()
-            selected = candidates[int(digest, 16) % len(candidates)]
-            replacements = [candidate for candidate in candidates if candidate.doc_id != selected.doc_id]
+            selected = eligible_candidates[int(digest, 16) % len(eligible_candidates)]
+            replacements = [candidate for candidate in eligible_candidates if candidate.doc_id != selected.doc_id]
             selected_utility = self._candidate_utility(
                 query,
                 initial_docs,
                 selected,
                 decision.sufficiency_score,
                 consistency,
-                base_answer=base_answer,
                 replacement_candidates=replacements,
             )
             utilities = [selected_utility]
         elif selection_strategy == "next_ranked":
-            selected = candidates[0]
-            replacements = [candidate for candidate in candidates if candidate.doc_id != selected.doc_id]
+            selected = eligible_candidates[0]
+            replacements = [candidate for candidate in eligible_candidates if candidate.doc_id != selected.doc_id]
             selected_utility = self._candidate_utility(
                 query,
                 initial_docs,
                 selected,
                 decision.sufficiency_score,
                 consistency,
-                base_answer=base_answer,
                 replacement_candidates=replacements,
             )
             utilities = [selected_utility]
@@ -964,59 +1047,12 @@ class StabilityAwareEvidenceSelector:
                     candidate,
                     decision.sufficiency_score,
                     consistency,
-                    base_answer=base_answer,
-                    replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
+                    replacement_candidates=[other for other in eligible_candidates if other.doc_id != candidate.doc_id],
                 )
-                for candidate in candidates
+                for candidate in eligible_candidates
             ]
-            feasible_utilities = [item for item in utilities if item.feasible] if self.enforce_sufficiency_filter else utilities
-            if not feasible_utilities:
-                final_docs = pool[: self.expanded_k]
-                answer = self.generator.generate(query, final_docs)
-                return {
-                    "query": query.text,
-                    "decision": "retrieve_more",
-                    "reason": "no_sufficiency_preserving_candidate",
-                    "used_docs": [doc.doc_id for doc in final_docs],
-                    "initial_doc_ids": [doc.doc_id for doc in initial_docs],
-                    "final_doc_ids": [doc.doc_id for doc in final_docs],
-                    "expanded_doc_ids": [doc.doc_id for doc in final_docs],
-                    "selected_doc_id": None,
-                    "expansion_triggered": True,
-                    "final_doc_count": len(final_docs),
-                    "features": decision.features,
-                    "sufficiency_score": decision.sufficiency_score,
-                    "anchoring_consistency": consistency,
-                    "post_selection_consistency": None,
-                    "stability_gain": None,
-                    "recovered": None,
-                    "diagnostic_generations": diagnostic_generations + 2 * len(candidates),
-                    "candidate_utility": None,
-                    "candidate_delta_sufficiency": None,
-                    "candidate_delta_consistency": None,
-                    "candidate_redundancy_penalty": None,
-                    "candidate_details": [
-                        {
-                            "candidate_doc_id": item.candidate_doc_id,
-                            "utility": item.utility,
-                            "delta_sufficiency": item.delta_sufficiency,
-                            "delta_consistency": item.delta_consistency,
-                            "redundancy_penalty": item.redundancy_penalty,
-                            "post_consistency": item.post_consistency,
-                            "anchor_deficit_reduction": item.anchor_deficit_reduction,
-                            "base_anchor_deficit": item.base_anchor_deficit,
-                            "post_anchor_deficit": item.post_anchor_deficit,
-                            "feasible": item.feasible,
-                        }
-                        for item in utilities
-                    ],
-                    "anchor_deficit_reduction": None,
-                    "tail_level": self.tail_level,
-                    "sufficiency_tolerance": self.sufficiency_tolerance,
-                    "answer": answer,
-                }
-            selected_utility = max(feasible_utilities, key=lambda item: item.anchor_deficit_reduction)
-            selected = next(candidate for candidate in candidates if candidate.doc_id == selected_utility.candidate_doc_id)
+            selected_utility = max(utilities, key=lambda item: item.anchor_deficit_reduction)
+            selected = next(candidate for candidate in eligible_candidates if candidate.doc_id == selected_utility.candidate_doc_id)
         else:
             utilities = [
                 self._candidate_utility(
@@ -1025,63 +1061,16 @@ class StabilityAwareEvidenceSelector:
                     candidate,
                     decision.sufficiency_score,
                     consistency,
-                    base_answer=base_answer,
-                    replacement_candidates=[other for other in candidates if other.doc_id != candidate.doc_id],
+                    replacement_candidates=[other for other in eligible_candidates if other.doc_id != candidate.doc_id],
                 )
-                for candidate in candidates
+                for candidate in eligible_candidates
             ]
-            feasible_utilities = [item for item in utilities if item.feasible] if self.enforce_sufficiency_filter else utilities
-            if not feasible_utilities:
-                final_docs = pool[: self.expanded_k]
-                answer = self.generator.generate(query, final_docs)
-                return {
-                    "query": query.text,
-                    "decision": "retrieve_more",
-                    "reason": "no_sufficiency_preserving_candidate",
-                    "used_docs": [doc.doc_id for doc in final_docs],
-                    "initial_doc_ids": [doc.doc_id for doc in initial_docs],
-                    "final_doc_ids": [doc.doc_id for doc in final_docs],
-                    "expanded_doc_ids": [doc.doc_id for doc in final_docs],
-                    "selected_doc_id": None,
-                    "expansion_triggered": True,
-                    "final_doc_count": len(final_docs),
-                    "features": decision.features,
-                    "sufficiency_score": decision.sufficiency_score,
-                    "anchoring_consistency": consistency,
-                    "post_selection_consistency": None,
-                    "stability_gain": None,
-                    "recovered": None,
-                    "diagnostic_generations": diagnostic_generations + 2 * len(candidates),
-                    "candidate_utility": None,
-                    "candidate_delta_sufficiency": None,
-                    "candidate_delta_consistency": None,
-                    "candidate_redundancy_penalty": None,
-                    "candidate_details": [
-                        {
-                            "candidate_doc_id": item.candidate_doc_id,
-                            "utility": item.utility,
-                            "delta_sufficiency": item.delta_sufficiency,
-                            "delta_consistency": item.delta_consistency,
-                            "redundancy_penalty": item.redundancy_penalty,
-                            "post_consistency": item.post_consistency,
-                            "anchor_deficit_reduction": item.anchor_deficit_reduction,
-                            "base_anchor_deficit": item.base_anchor_deficit,
-                            "post_anchor_deficit": item.post_anchor_deficit,
-                            "feasible": item.feasible,
-                        }
-                        for item in utilities
-                    ],
-                    "anchor_deficit_reduction": None,
-                    "tail_level": self.tail_level,
-                    "sufficiency_tolerance": self.sufficiency_tolerance,
-                    "answer": answer,
-                }
-            selected_utility = max(feasible_utilities, key=lambda item: item.utility)
-            selected = next(candidate for candidate in candidates if candidate.doc_id == selected_utility.candidate_doc_id)
+            selected_utility = max(utilities, key=lambda item: item.utility)
+            selected = next(candidate for candidate in eligible_candidates if candidate.doc_id == selected_utility.candidate_doc_id)
 
         final_docs = initial_docs + [selected]
         answer = self.generator.generate(query, final_docs)
-        candidate_scoring_generations = 2 * len(candidates) if selection_strategy in {"utility", "oracle"} else 2
+        candidate_scoring_generations = 2 * len(eligible_candidates) if selection_strategy in {"utility", "oracle"} else 2
         return {
             "query": query.text,
             "decision": "select_evidence",
@@ -1107,7 +1096,7 @@ class StabilityAwareEvidenceSelector:
             "anchor_deficit_reduction": selected_utility.anchor_deficit_reduction,
             "tail_level": self.tail_level,
             "sufficiency_tolerance": self.sufficiency_tolerance,
-            "candidate_details": [
+            "candidate_details": infeasible_details + [
                 {
                     "candidate_doc_id": item.candidate_doc_id,
                     "utility": item.utility,
