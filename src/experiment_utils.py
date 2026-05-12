@@ -11,6 +11,18 @@ from typing import Any
 import numpy as np
 
 
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, set):
+        return list(obj)
+    return str(obj)
+
+
 def set_global_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -29,16 +41,16 @@ def write_run_config(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     enriched = payload.copy()
     enriched["saved_at_utc"] = datetime.now(timezone.utc).isoformat()
-    path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(enriched, indent=2, default=_json_default), encoding="utf-8")
 
 
 def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     enriched = payload.copy()
-    canonical = json.dumps(enriched, sort_keys=True, ensure_ascii=False)
+    canonical = json.dumps(enriched, sort_keys=True, ensure_ascii=False, default=_json_default)
     enriched["manifest_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
     enriched["saved_at_utc"] = datetime.now(timezone.utc).isoformat()
-    path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(enriched, indent=2, default=_json_default), encoding="utf-8")
     return enriched
 
 

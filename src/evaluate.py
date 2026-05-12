@@ -12,6 +12,7 @@ from experiment_utils import load_manifest, set_global_seed, write_run_config
 from rag.pipeline import (
     FaissRetriever,
     GENERATOR_PROMPT_VERSION,
+    HFGenerator,
     OpenAIGenerator,
     Query,
     SimpleGenerator,
@@ -51,6 +52,21 @@ VALID_BASELINES = {
     "selection_mean_consistency",
     "selection_no_filter",
 }
+
+
+def _json_safe(obj: Any) -> Any:
+    try:
+        import numpy as np
+
+        if isinstance(obj, np.generic):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+    except Exception:
+        pass
+    if isinstance(obj, (set, tuple)):
+        return list(obj)
+    return str(obj)
 
 
 def parse_baselines(raw: str) -> list[str]:
@@ -123,16 +139,17 @@ def build_resources(args: argparse.Namespace):
         )
         faiss_retriever = simple_retriever
 
-    if args.mode != "demo" and not args.use_openai and not args.allow_simple_generator:
+    if args.mode != "demo" and not args.use_openai and not args.hf_model_id and not args.allow_simple_generator:
         raise ValueError(
-            "Non-demo evaluation requires real QA generation. Use --use-openai or pass --allow-simple-generator explicitly."
+            "Non-demo evaluation requires real QA generation. Use --use-openai, --hf-model-id, or pass --allow-simple-generator explicitly."
         )
 
-    generator = (
-        OpenAIGenerator(model=args.openai_model, cache_path=args.openai_cache_path)
-        if args.use_openai
-        else SimpleGenerator()
-    )
+    if args.use_openai:
+        generator = OpenAIGenerator(model=args.openai_model, cache_path=args.openai_cache_path)
+    elif args.hf_model_id:
+        generator = HFGenerator(model_id=args.hf_model_id, max_new_tokens=args.hf_max_new_tokens)
+    else:
+        generator = SimpleGenerator()
 
     return corpus, queries, simple_retriever, faiss_retriever, generator
 
@@ -155,9 +172,9 @@ def resolve_manifest_overrides(args: argparse.Namespace) -> argparse.Namespace:
     args.stability_threshold = float(manifest.get("stability_threshold", args.stability_threshold))
     args.tail_level = float(manifest.get("tail_level", args.tail_level))
     args.sufficiency_tolerance = float(manifest.get("sufficiency_tolerance", args.sufficiency_tolerance))
-    args.utility_alpha = float(manifest.get("utility_alpha", args.utility_alpha))
-    args.utility_beta = float(manifest.get("utility_beta", args.utility_beta))
-    args.utility_rho = float(manifest.get("utility_rho", args.utility_rho))
+    args.utility_alpha = float(manifest.get("utility_alpha", getattr(args, "utility_alpha", 0.3)))
+    args.utility_beta = float(manifest.get("utility_beta", getattr(args, "utility_beta", 0.6)))
+    args.utility_rho = float(manifest.get("utility_rho", getattr(args, "utility_rho", 0.1)))
     args.embedding_model = str(manifest["embedding_model"])
     args.seed = int(manifest["seed"])
     args.retrieval_cache_dir = str(manifest.get("retrieval_cache_dir", args.retrieval_cache_dir))
@@ -333,9 +350,9 @@ def apply_stability_calibration(args: argparse.Namespace) -> argparse.Namespace:
     args.stability_threshold = float(best["stability_threshold"])
     args.tail_level = float(best.get("tail_level", args.tail_level))
     args.sufficiency_tolerance = float(best.get("sufficiency_tolerance", args.sufficiency_tolerance))
-    args.utility_alpha = float(best.get("utility_alpha", args.utility_alpha))
-    args.utility_beta = float(best.get("utility_beta", args.utility_beta))
-    args.utility_rho = float(best["utility_rho"])
+    args.utility_alpha = float(best.get("utility_alpha", getattr(args, "utility_alpha", 0.3)))
+    args.utility_beta = float(best.get("utility_beta", getattr(args, "utility_beta", 0.6)))
+    args.utility_rho = float(best.get("utility_rho", getattr(args, "utility_rho", 0.1)))
     return args
 
 
@@ -624,6 +641,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
                 "f1",
                 "answer",
             ],
+            extrasaction="ignore",
         )
         writer.writeheader()
         for row in rows:
@@ -632,7 +650,11 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
             row["initial_doc_ids"] = "|".join(row["initial_doc_ids"])
             row["final_doc_ids"] = "|".join(row["final_doc_ids"])
             if isinstance(row.get("candidate_details"), list):
-                row["candidate_details"] = json.dumps(row["candidate_details"], ensure_ascii=False)
+                row["candidate_details"] = json.dumps(
+                    row["candidate_details"],
+                    ensure_ascii=False,
+                    default=_json_safe,
+                )
             writer.writerow(row)
             serialized_rows.append(row)
 
@@ -640,7 +662,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
     unstable_rows = [row for row in serialized_rows if row.get("reason") == "sufficient_but_unstable"]
     if serialized_rows:
         with unstable_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(serialized_rows[0].keys()))
+            writer = csv.DictWriter(f, fieldnames=list(serialized_rows[0].keys()), extrasaction="ignore")
             writer.writeheader()
             writer.writerows(unstable_rows)
 
@@ -704,6 +726,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
             writer = csv.DictWriter(
                 f,
                 fieldnames=candidate_fieldnames,
+                extrasaction="ignore",
             )
             writer.writeheader()
             writer.writerows(candidate_rows)
@@ -717,6 +740,8 @@ def main() -> None:
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--allow-simple-generator", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
+    parser.add_argument("--hf-model-id", default="")
+    parser.add_argument("--hf-max-new-tokens", type=int, default=64)
     parser.add_argument("--openai-cache-path", default="results/openai_cache.jsonl")
     parser.add_argument("--retrieval-cache-dir", default="results/cache")
     parser.add_argument("--nq-max-tokens", type=int, default=220)
@@ -753,8 +778,8 @@ def main() -> None:
     args = parser.parse_args()
     args = resolve_manifest_overrides(args)
     args = apply_stability_calibration(args)
-    if not args.use_openai and args.mode != "demo" and not args.allow_simple_generator:
-        raise ValueError("For paper-grade EM/F1, run evaluate.py with --use-openai.")
+    if not args.use_openai and not args.hf_model_id and args.mode != "demo" and not args.allow_simple_generator:
+        raise ValueError("For paper-grade EM/F1, run evaluate.py with --use-openai or --hf-model-id.")
     set_global_seed(args.seed)
 
     def _format_eta(seconds: float) -> str:
@@ -784,8 +809,8 @@ def main() -> None:
         )
 
     _, queries, simple_retriever, _, generator = build_resources(args)
-    generator_type = "openai" if args.use_openai else "simple_placeholder"
-    model_version = args.openai_model if args.use_openai else "simple_placeholder"
+    generator_type = "openai" if args.use_openai else ("hf_local" if args.hf_model_id else "simple_placeholder")
+    model_version = args.openai_model if args.use_openai else (args.hf_model_id if args.hf_model_id else "simple_placeholder")
     estimator, structure_aware_name, calibration_config = load_estimator(args)
     confidence_threshold = load_confidence_threshold(args)
     selected_baselines = set(parse_baselines(args.baselines))
