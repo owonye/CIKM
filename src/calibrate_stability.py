@@ -127,8 +127,8 @@ def build_candidate_records(args: argparse.Namespace) -> tuple[list[dict[str, An
         "sufficient_with_candidates": len(records),
         "insufficient_count": insufficient_count,
         "no_candidate_count": no_candidate_count,
-        "generator_type": "openai" if args.use_openai else "simple_placeholder",
-        "model_version": args.openai_model if args.use_openai else "simple_placeholder",
+        "generator_type": "openai" if args.use_openai else ("hf_local" if args.hf_model_id else "simple_placeholder"),
+        "model_version": args.openai_model if args.use_openai else (args.hf_model_id if args.hf_model_id else "simple_placeholder"),
         "openai_cache_stats": generator.get_cache_stats() if args.use_openai else None,
         "calibration_config": calibration_config,
     }
@@ -213,6 +213,8 @@ def main() -> None:
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--allow-simple-generator", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
+    parser.add_argument("--hf-model-id", default="")
+    parser.add_argument("--hf-max-new-tokens", type=int, default=64)
     parser.add_argument("--openai-cache-path", default="results/openai_cache.jsonl")
     parser.add_argument("--retrieval-cache-dir", default="results/cache")
     parser.add_argument("--nq-max-tokens", type=int, default=220)
@@ -244,8 +246,8 @@ def main() -> None:
     parser.add_argument("--output", default="results/stability_calib.json")
     args = parser.parse_args()
     args = resolve_manifest_overrides(args)
-    if not args.use_openai and args.mode != "demo" and not args.allow_simple_generator:
-        raise ValueError("Non-demo stability calibration requires --use-openai or --allow-simple-generator.")
+    if not args.use_openai and not args.hf_model_id and args.mode != "demo" and not args.allow_simple_generator:
+        raise ValueError("Non-demo stability calibration requires --use-openai, --hf-model-id, or --allow-simple-generator.")
     set_global_seed(args.seed)
 
     gamma_grid = parse_float_grid(args.gamma_grid)

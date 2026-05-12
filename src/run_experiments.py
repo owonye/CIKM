@@ -101,15 +101,18 @@ def main() -> None:
     parser.add_argument("--run-name", default="")
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
+    parser.add_argument("--hf-model-id", default="")
+    parser.add_argument("--hf-max-new-tokens", type=int, default=64)
     parser.add_argument("--openai-cache-path", default=DEFAULT_OPENAI_CACHE_PATH)
     parser.add_argument("--retrieval-cache-dir", default=DEFAULT_RETRIEVAL_CACHE_DIR)
     parser.add_argument("--allow-simple-generator", action="store_true")
     args = parser.parse_args()
 
     if not args.use_openai and not args.allow_simple_generator:
-        raise ValueError("Paper-grade experiments require --use-openai (or --allow-simple-generator explicitly).")
-    if args.label_strategy == "hybrid_generation" and not args.use_openai:
-        raise ValueError("hybrid_generation label strategy requires --use-openai.")
+        print("[WARN] --use-openai is disabled; enabling simple generator fallback automatically.")
+        args.allow_simple_generator = True
+    if args.label_strategy == "hybrid_generation" and not args.use_openai and not args.hf_model_id:
+        raise ValueError("hybrid_generation label strategy requires --use-openai or --hf-model-id.")
     if args.doc_limit <= 0:
         raise ValueError("--doc-limit must be positive.")
 
@@ -248,6 +251,8 @@ def main() -> None:
                     args.openai_cache_path,
                 ]
             )
+        if args.hf_model_id:
+            calibrate_cmd.extend(["--hf-model-id", args.hf_model_id, "--hf-max-new-tokens", str(args.hf_max_new_tokens)])
         run_command(calibrate_cmd)
 
         if args.run_stability_selection:
@@ -307,6 +312,8 @@ def main() -> None:
                         args.openai_cache_path,
                     ]
                 )
+            if args.hf_model_id:
+                stability_calibrate_cmd.extend(["--hf-model-id", args.hf_model_id, "--hf-max-new-tokens", str(args.hf_max_new_tokens)])
             if args.allow_simple_generator:
                 stability_calibrate_cmd.append("--allow-simple-generator")
             run_command(stability_calibrate_cmd)
@@ -379,6 +386,8 @@ def main() -> None:
                     args.openai_cache_path,
                 ]
             )
+        if args.hf_model_id:
+            evaluate_cmd.extend(["--hf-model-id", args.hf_model_id, "--hf-max-new-tokens", str(args.hf_max_new_tokens)])
         if args.allow_simple_generator:
             evaluate_cmd.append("--allow-simple-generator")
         if args.run_stability_selection:

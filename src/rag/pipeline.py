@@ -214,6 +214,54 @@ class OpenAIGenerator:
         return output
 
 
+class HFGenerator:
+    """
+    Local Hugging Face causal LM generator.
+    Deterministic decoding (do_sample=False).
+    """
+
+    def __init__(self, model_id: str, max_new_tokens: int = 64) -> None:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        self.model_id = model_id
+        self.max_new_tokens = max_new_tokens
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+
+    def get_cache_stats(self) -> dict[str, int]:
+        # Keep interface compatibility with OpenAIGenerator for metadata logging.
+        return {"cache_hits": 0, "cache_misses": 0, "cache_size": 0}
+
+    def generate(self, query: Query, evidence: List[RetrievedDocument]) -> str:
+        context = "\n\n".join(f"[{doc.doc_id}] {doc.text}" for doc in evidence)
+        prompt = (
+            "Answer the question using only the provided evidence.\n"
+            "Return only the shortest answer span or phrase. Do not write a sentence unless the answer requires it.\n"
+            "If the evidence does not contain the answer, return exactly: unknown\n\n"
+            f"Question: {query.text}\n\n"
+            f"Evidence:\n{context}\n\n"
+            "Short answer:"
+        )
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            temperature=None,
+            top_p=None,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        gen_tokens = outputs[0][inputs["input_ids"].shape[1] :]
+        return self.tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+
+
 class FaissRetriever:
     """
     FAISS-based dense retriever.

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from experiment_utils import load_manifest, set_global_seed, write_run_config
 from rag.pipeline import (
     FaissRetriever,
+    HFGenerator,
     OpenAIGenerator,
     Query,
     SimpleRetriever,
@@ -263,6 +264,8 @@ def main() -> None:
     parser.add_argument("--label-strategy", choices=["evidence", "hybrid_generation"], default="evidence")
     parser.add_argument("--use-openai", action="store_true")
     parser.add_argument("--openai-model", default="gpt-4.1-mini")
+    parser.add_argument("--hf-model-id", default="")
+    parser.add_argument("--hf-max-new-tokens", type=int, default=64)
     parser.add_argument("--openai-cache-path", default="results/openai_cache.jsonl")
     parser.add_argument("--retrieval-cache-dir", default="results/cache")
     parser.add_argument("--nq-max-tokens", type=int, default=220)
@@ -319,12 +322,17 @@ def main() -> None:
         args.nq_max_tokens,
         args.nq_stride,
     )
-    if args.label_strategy == "hybrid_generation" and not args.use_openai:
-        raise ValueError("hybrid_generation label strategy requires --use-openai.")
+    if args.label_strategy == "hybrid_generation" and not args.use_openai and not args.hf_model_id:
+        raise ValueError("hybrid_generation label strategy requires --use-openai or --hf-model-id.")
 
     examples = []
     excluded_no_support = 0
-    generator = OpenAIGenerator(model=args.openai_model, cache_path=args.openai_cache_path) if args.use_openai else None
+    if args.use_openai:
+        generator = OpenAIGenerator(model=args.openai_model, cache_path=args.openai_cache_path)
+    elif args.hf_model_id:
+        generator = HFGenerator(model_id=args.hf_model_id, max_new_tokens=args.hf_max_new_tokens)
+    else:
+        generator = None
     feature_aspect_model = "" if args.mode == "demo" else args.embedding_model
     total_queries = len(queries)
     stage_started = time.time()
@@ -545,8 +553,8 @@ def main() -> None:
             "num_queries": len(queries),
             "num_examples": len(examples),
             "excluded_no_support": excluded_no_support,
-            "generator_type": "openai" if args.use_openai else "simple_placeholder",
-            "model_version": args.openai_model if args.use_openai else "simple_placeholder",
+            "generator_type": "openai" if args.use_openai else ("hf_local" if args.hf_model_id else "simple_placeholder"),
+            "model_version": args.openai_model if args.use_openai else (args.hf_model_id if args.hf_model_id else "simple_placeholder"),
             "openai_cache_stats": generator.get_cache_stats() if generator else None,
             "manifest_path": args.manifest_path or None,
             "manifest_id": args.manifest_id,
