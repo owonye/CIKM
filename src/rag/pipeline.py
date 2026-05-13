@@ -285,6 +285,13 @@ class FaissRetriever:
         self.cache_namespace = cache_namespace
 
         matrix = np.array([doc.embedding for doc in corpus], dtype="float32")
+        if len(matrix.shape) == 1:
+            # Some cached/source embeddings can degrade into a 1D object-like array.
+            # Reconstruct a proper [N, D] matrix when possible.
+            try:
+                matrix = np.stack([np.asarray(doc.embedding, dtype="float32") for doc in corpus], axis=0)
+            except Exception:
+                matrix = np.atleast_2d(matrix.astype("float32"))
         if len(matrix.shape) != 2:
             raise ValueError("Embeddings must be a 2D matrix.")
 
