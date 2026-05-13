@@ -853,7 +853,11 @@ class StabilityAwareEvidenceSelector:
         post_deficit = anchor_deficit(post_consistency, self.stability_threshold)
         deficit_reduction = base_deficit - post_deficit
         feasible = post_score >= self.estimator.threshold - self.sufficiency_tolerance
-        utility = deficit_reduction - self.utility_rho * redundancy_penalty
+        utility = (
+            self.utility_alpha * delta_sufficiency
+            + self.utility_beta * deficit_reduction
+            - self.utility_rho * redundancy_penalty
+        )
         return CandidateUtility(
             candidate_doc_id=candidate.doc_id,
             utility=utility,

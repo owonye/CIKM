@@ -161,6 +161,14 @@ def summarize_end_to_end(rows: list[dict[str, str]], dataset: str) -> list[dict[
             continue
         recovery_labeled = [row for row in group if row.get("recovered", "") != ""]
         consistency_labeled = [row for row in group if row.get("post_selection_consistency", "") != ""]
+        consistency = ""
+        if consistency_labeled:
+            consistency = sum(safe_float(row.get("post_selection_consistency")) for row in consistency_labeled) / len(
+                consistency_labeled
+            )
+        recovery_rate = ""
+        if recovery_labeled:
+            recovery_rate = sum(1 for row in recovery_labeled if safe_bool(row.get("recovered"))) / len(recovery_labeled)
         output.append(
             {
                 "dataset": dataset,
@@ -170,14 +178,8 @@ def summarize_end_to_end(rows: list[dict[str, str]], dataset: str) -> list[dict[
                 "f1": sum(safe_float(row.get("f1")) for row in group) / count,
                 "avg_docs": sum(safe_float(row.get("doc_count")) for row in group) / count,
                 "expand_rate": sum(1 for row in group if safe_bool(row.get("expanded"))) / count,
-                "consistency": (
-                    sum(safe_float(row.get("post_selection_consistency")) for row in consistency_labeled)
-                    / max(len(consistency_labeled), 1)
-                ),
-                "recovery_rate": (
-                    sum(1 for row in recovery_labeled if safe_bool(row.get("recovered")))
-                    / max(len(recovery_labeled), 1)
-                ),
+                "consistency": consistency,
+                "recovery_rate": recovery_rate,
                 "diagnostic_generations": sum(safe_float(row.get("diagnostic_generations")) for row in group) / count,
             }
         )
