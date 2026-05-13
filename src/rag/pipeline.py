@@ -73,6 +73,7 @@ class CandidateUtility:
     delta_consistency: float
     redundancy_penalty: float
     post_consistency: float
+    predicted_deficit_reduction: float = 0.0
     anchor_deficit_reduction: float = 0.0
     base_anchor_deficit: float = 0.0
     post_anchor_deficit: float = 0.0
@@ -853,9 +854,11 @@ class StabilityAwareEvidenceSelector:
         post_deficit = anchor_deficit(post_consistency, self.stability_threshold)
         deficit_reduction = base_deficit - post_deficit
         feasible = post_score >= self.estimator.threshold - self.sufficiency_tolerance
+        repair_signal = clamp_unit(0.5 * max(delta_sufficiency, 0.0) + 0.5 * compute_query_overlap(query, candidate))
+        predicted_deficit_reduction = base_deficit * repair_signal
         utility = (
             self.utility_alpha * delta_sufficiency
-            + self.utility_beta * deficit_reduction
+            + self.utility_beta * predicted_deficit_reduction
             - self.utility_rho * redundancy_penalty
         )
         return CandidateUtility(
@@ -865,6 +868,7 @@ class StabilityAwareEvidenceSelector:
             delta_consistency=delta_consistency,
             redundancy_penalty=redundancy_penalty,
             post_consistency=post_consistency,
+            predicted_deficit_reduction=predicted_deficit_reduction,
             anchor_deficit_reduction=deficit_reduction,
             base_anchor_deficit=base_deficit,
             post_anchor_deficit=post_deficit,
@@ -902,6 +906,7 @@ class StabilityAwareEvidenceSelector:
                 "delta_consistency": None,
                 "redundancy_penalty": None,
                 "post_consistency": None,
+                "predicted_deficit_reduction": None,
                 "anchor_deficit_reduction": None,
                 "base_anchor_deficit": None,
                 "post_anchor_deficit": None,
@@ -1166,6 +1171,7 @@ class StabilityAwareEvidenceSelector:
                     "delta_consistency": item.delta_consistency,
                     "redundancy_penalty": item.redundancy_penalty,
                     "post_consistency": item.post_consistency,
+                    "predicted_deficit_reduction": item.predicted_deficit_reduction,
                     "anchor_deficit_reduction": item.anchor_deficit_reduction,
                     "base_anchor_deficit": item.base_anchor_deficit,
                     "post_anchor_deficit": item.post_anchor_deficit,
