@@ -8,7 +8,6 @@ from rag.pipeline import (
     build_fixed_candidate_perturbations,
     compute_anchoring_consistency,
     compute_lexical_redundancy,
-    compute_query_overlap,
     extract_evidence_features,
 )
 
@@ -51,9 +50,8 @@ def score_candidate(
     post_deficit = anchor_deficit(post_c_score, stability_threshold)
     deficit_reduction = base_deficit - post_deficit
     feasible = post_f_score >= estimator.threshold - sufficiency_tolerance
-    repair_signal = 0.5 * max(delta_f, 0.0) + 0.5 * compute_query_overlap(query, candidate)
-    predicted_deficit_reduction = base_deficit * max(0.0, min(repair_signal, 1.0))
-    utility = alpha * delta_f + beta * predicted_deficit_reduction - rho * redundancy
+    _ = (alpha, beta)
+    utility = deficit_reduction - rho * redundancy
     return CandidateScore(
         doc_id=candidate.doc_id,
         delta_f=delta_f,
