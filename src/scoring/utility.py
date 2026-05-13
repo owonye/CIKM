@@ -20,8 +20,6 @@ def score_candidate(
     estimator: SufficiencyEstimator,
     base_f_score: float,
     base_c_score: float,
-    alpha: float,
-    beta: float,
     rho: float,
     stability_threshold: float = 0.8,
     tail_level: float = 1.0,
@@ -50,7 +48,6 @@ def score_candidate(
     post_deficit = anchor_deficit(post_c_score, stability_threshold)
     deficit_reduction = base_deficit - post_deficit
     feasible = post_f_score >= estimator.threshold - sufficiency_tolerance
-    _ = (alpha, beta)
     utility = deficit_reduction - rho * redundancy
     return CandidateScore(
         doc_id=candidate.doc_id,

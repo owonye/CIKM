@@ -79,8 +79,6 @@ def main() -> None:
     parser.add_argument("--stability-threshold", type=float, default=0.8)
     parser.add_argument("--tail-level", type=float, default=1.0)
     parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
-    parser.add_argument("--utility-alpha", type=float, default=0.3)
-    parser.add_argument("--utility-beta", type=float, default=0.6)
     parser.add_argument("--utility-rho", type=float, default=0.1)
     parser.add_argument("--confidence-threshold", type=float, default=0.88)
     parser.add_argument("--weak-support-overlap-threshold", type=float, default=0.2)
@@ -179,8 +177,6 @@ def main() -> None:
                 "stability_threshold": args.stability_threshold,
                 "tail_level": args.tail_level,
                 "sufficiency_tolerance": args.sufficiency_tolerance,
-                "utility_alpha": args.utility_alpha,
-                "utility_beta": args.utility_beta,
                 "utility_rho": args.utility_rho,
                 "label_strategy": args.label_strategy,
                 "embedding_model": args.embedding_model,
@@ -355,10 +351,6 @@ def main() -> None:
             str(args.tail_level),
             "--sufficiency-tolerance",
             str(args.sufficiency_tolerance),
-            "--utility-alpha",
-            str(args.utility_alpha),
-            "--utility-beta",
-            str(args.utility_beta),
             "--utility-rho",
             str(args.utility_rho),
             "--confidence-threshold",

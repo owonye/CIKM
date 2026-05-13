@@ -795,8 +795,6 @@ class StabilityAwareEvidenceSelector:
         expanded_k: int = 8,
         candidate_pool_k: int = 8,
         stability_threshold: float = 0.8,
-        utility_alpha: float = 0.3,
-        utility_beta: float = 0.6,
         utility_rho: float = 0.1,
         tail_level: float = 1.0,
         sufficiency_tolerance: float = 0.0,
@@ -811,8 +809,6 @@ class StabilityAwareEvidenceSelector:
         self.expanded_k = expanded_k
         self.candidate_pool_k = max(candidate_pool_k, expanded_k, initial_k + 1)
         self.stability_threshold = stability_threshold
-        self.utility_alpha = utility_alpha
-        self.utility_beta = utility_beta
         self.utility_rho = utility_rho
         self.tail_level = tail_level
         self.sufficiency_tolerance = sufficiency_tolerance
@@ -853,7 +849,6 @@ class StabilityAwareEvidenceSelector:
         post_deficit = anchor_deficit(post_consistency, self.stability_threshold)
         deficit_reduction = base_deficit - post_deficit
         feasible = post_score >= self.estimator.threshold - self.sufficiency_tolerance
-        _ = (self.utility_alpha, self.utility_beta)
         utility = deficit_reduction - self.utility_rho * redundancy_penalty
         return CandidateUtility(
             candidate_doc_id=candidate.doc_id,

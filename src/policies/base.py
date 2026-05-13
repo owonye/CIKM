@@ -13,8 +13,6 @@ class PolicyContext:
     initial_k: int = 3
     expanded_k: int = 8
     stability_threshold: float = 0.8
-    utility_alpha: float = 0.3
-    utility_beta: float = 0.6
     utility_rho: float = 0.1
     aspect_model: str = "BAAI/bge-small-en-v1.5"
 

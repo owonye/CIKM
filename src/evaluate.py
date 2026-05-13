@@ -46,8 +46,6 @@ VALID_BASELINES = {
     "next_ranked_selection",
     "stability_aware_selection",
     "oracle_best_candidate",
-    "selection_delta_f_only",
-    "selection_delta_c_only",
     "selection_no_redundancy",
     "selection_mean_consistency",
     "selection_no_filter",
@@ -172,8 +170,6 @@ def resolve_manifest_overrides(args: argparse.Namespace) -> argparse.Namespace:
     args.stability_threshold = float(manifest.get("stability_threshold", args.stability_threshold))
     args.tail_level = float(manifest.get("tail_level", args.tail_level))
     args.sufficiency_tolerance = float(manifest.get("sufficiency_tolerance", args.sufficiency_tolerance))
-    args.utility_alpha = float(manifest.get("utility_alpha", getattr(args, "utility_alpha", 0.3)))
-    args.utility_beta = float(manifest.get("utility_beta", getattr(args, "utility_beta", 0.6)))
     args.utility_rho = float(manifest.get("utility_rho", getattr(args, "utility_rho", 0.1)))
     args.embedding_model = str(manifest["embedding_model"])
     args.seed = int(manifest["seed"])
@@ -350,8 +346,6 @@ def apply_stability_calibration(args: argparse.Namespace) -> argparse.Namespace:
     args.stability_threshold = float(best["stability_threshold"])
     args.tail_level = float(best.get("tail_level", args.tail_level))
     args.sufficiency_tolerance = float(best.get("sufficiency_tolerance", args.sufficiency_tolerance))
-    args.utility_alpha = float(best.get("utility_alpha", getattr(args, "utility_alpha", 0.3)))
-    args.utility_beta = float(best.get("utility_beta", getattr(args, "utility_beta", 0.6)))
     args.utility_rho = float(best.get("utility_rho", getattr(args, "utility_rho", 0.1)))
     return args
 
@@ -520,8 +514,6 @@ def run_stability_aware_selection(
     expanded_k: int = 8,
     candidate_pool_k: int = 8,
     stability_threshold: float = 0.8,
-    utility_alpha: float = 0.3,
-    utility_beta: float = 0.6,
     utility_rho: float = 0.1,
     tail_level: float = 1.0,
     sufficiency_tolerance: float = 0.0,
@@ -539,8 +531,6 @@ def run_stability_aware_selection(
         expanded_k=expanded_k,
         candidate_pool_k=candidate_pool_k,
         stability_threshold=stability_threshold,
-        utility_alpha=utility_alpha,
-        utility_beta=utility_beta,
         utility_rho=utility_rho,
         tail_level=tail_level,
         sufficiency_tolerance=sufficiency_tolerance,
@@ -759,8 +749,6 @@ def main() -> None:
     parser.add_argument("--stability-threshold", type=float, default=0.8)
     parser.add_argument("--tail-level", type=float, default=1.0)
     parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
-    parser.add_argument("--utility-alpha", type=float, default=0.3)
-    parser.add_argument("--utility-beta", type=float, default=0.6)
     parser.add_argument("--utility-rho", type=float, default=0.1)
     parser.add_argument("--weak-support-overlap-threshold", type=float, default=0.2)
     parser.add_argument("--confidence-threshold", type=float, default=0.88)
@@ -915,18 +903,16 @@ def main() -> None:
             row["calibration_source"] = calibration_source
             rows.append(row)
         stability_baselines = {
-            "diagnose_then_expand": ("diagnose_then_expand", args.utility_alpha, args.utility_beta, args.utility_rho),
-            "random_selection": ("random", args.utility_alpha, args.utility_beta, args.utility_rho),
-            "next_ranked_selection": ("next_ranked", args.utility_alpha, args.utility_beta, args.utility_rho),
-            "stability_aware_selection": ("utility", args.utility_alpha, args.utility_beta, args.utility_rho),
-            "oracle_best_candidate": ("oracle", args.utility_alpha, args.utility_beta, args.utility_rho),
-            "selection_delta_f_only": ("utility", 1.0, 0.0, 0.0),
-            "selection_delta_c_only": ("utility", 0.0, 1.0, 0.0),
-            "selection_no_redundancy": ("utility", args.utility_alpha, args.utility_beta, 0.0),
-            "selection_mean_consistency": ("utility", args.utility_alpha, args.utility_beta, args.utility_rho),
-            "selection_no_filter": ("utility", args.utility_alpha, args.utility_beta, args.utility_rho),
+            "diagnose_then_expand": ("diagnose_then_expand", args.utility_rho),
+            "random_selection": ("random", args.utility_rho),
+            "next_ranked_selection": ("next_ranked", args.utility_rho),
+            "stability_aware_selection": ("utility", args.utility_rho),
+            "oracle_best_candidate": ("oracle", args.utility_rho),
+            "selection_no_redundancy": ("utility", 0.0),
+            "selection_mean_consistency": ("utility", args.utility_rho),
+            "selection_no_filter": ("utility", args.utility_rho),
         }
-        for baseline_name, (strategy, utility_alpha, utility_beta, utility_rho) in stability_baselines.items():
+        for baseline_name, (strategy, utility_rho) in stability_baselines.items():
             if baseline_name not in selected_baselines:
                 continue
             row = add_metrics(
@@ -939,8 +925,6 @@ def main() -> None:
                     expanded_k=args.expanded_k,
                     candidate_pool_k=args.candidate_pool_k,
                     stability_threshold=args.stability_threshold,
-                    utility_alpha=utility_alpha,
-                    utility_beta=utility_beta,
                     utility_rho=utility_rho,
                     tail_level=1.0 if baseline_name == "selection_mean_consistency" else args.tail_level,
                     sufficiency_tolerance=args.sufficiency_tolerance,
