@@ -284,16 +284,19 @@ class FaissRetriever:
         self.cache_dir = cache_dir
         self.cache_namespace = cache_namespace
 
-        matrix = np.array([doc.embedding for doc in corpus], dtype="float32")
-        if len(matrix.shape) == 1:
-            # Some cached/source embeddings can degrade into a 1D object-like array.
-            # Reconstruct a proper [N, D] matrix when possible.
-            try:
-                matrix = np.stack([np.asarray(doc.embedding, dtype="float32") for doc in corpus], axis=0)
-            except Exception:
-                matrix = np.atleast_2d(matrix.astype("float32"))
-        if len(matrix.shape) != 2:
-            raise ValueError("Embeddings must be a 2D matrix.")
+        expected_dimension = self.encoder.get_sentence_embedding_dimension()
+        vectors = [np.asarray(doc.embedding, dtype="float32") for doc in corpus]
+        valid_vectors = [vec for vec in vectors if vec.ndim == 1 and len(vec) == expected_dimension]
+        if len(valid_vectors) != len(corpus):
+            bad_count = len(corpus) - len(valid_vectors)
+            raise ValueError(
+                f"Invalid embedding dimension for {bad_count}/{len(corpus)} documents "
+                f"(expected {expected_dimension})."
+            )
+        if not valid_vectors:
+            raise ValueError("Cannot build FAISS index from an empty corpus.")
+
+        matrix = np.stack(valid_vectors, axis=0).astype("float32")
 
         dimension = matrix.shape[1]
         cached_index = self._load_cached_index(dimension)
@@ -1387,19 +1390,31 @@ def _load_open_qa_sample(
     limit: int,
     split: str,
 ) -> List[dict]:
-    dataset = _load_dataset_first(dataset_candidates, f"{split}[{start}:{start + limit}]")
-    raw_docs: List[dict] = []
-    seen_ids = set()
-    for item_idx, item in enumerate(dataset):
-        absolute_item_idx = start + item_idx
-        for passage_idx, (title, text) in enumerate(_iter_text_contexts(dict(item))):
-            normalized_title = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "passage"
-            doc_id = f"{dataset_name}::{split}::{absolute_item_idx}::{passage_idx}::{normalized_title}"
-            if doc_id in seen_ids:
-                continue
-            seen_ids.add(doc_id)
-            raw_docs.append({"doc_id": doc_id, "text": f"{title}. {text}"})
-    return raw_docs
+    last_error: Exception | None = None
+    for candidate in dataset_candidates:
+        try:
+            dataset = _load_dataset_first([candidate], f"{split}[{start}:{start + limit}]")
+        except Exception as exc:  # pragma: no cover - depends on optional HF datasets
+            last_error = exc
+            continue
+
+        raw_docs: List[dict] = []
+        seen_ids = set()
+        for item_idx, item in enumerate(dataset):
+            absolute_item_idx = start + item_idx
+            for passage_idx, (title, text) in enumerate(_iter_text_contexts(dict(item))):
+                normalized_title = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "passage"
+                doc_id = f"{dataset_name}::{split}::{absolute_item_idx}::{passage_idx}::{normalized_title}"
+                if doc_id in seen_ids:
+                    continue
+                seen_ids.add(doc_id)
+                raw_docs.append({"doc_id": doc_id, "text": f"{title}. {text}"})
+        if raw_docs:
+            return raw_docs
+
+    if last_error is not None:
+        raise last_error
+    raise ValueError(f"No retrievable text contexts found for {dataset_name} {split}[{start}:{start + limit}].")
 
 
 def _load_open_qa_queries(
