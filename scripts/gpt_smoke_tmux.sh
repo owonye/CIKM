@@ -27,6 +27,9 @@ run_smoke() {
   set -a
   source .env
   set +a
+  export OPENAI_API_KEY="${OPENAI_API_KEY//$'\r'/}"
+  export OPENAI_API_KEY="${OPENAI_API_KEY#"${OPENAI_API_KEY%%[![:space:]]*}"}"
+  export OPENAI_API_KEY="${OPENAI_API_KEY%"${OPENAI_API_KEY##*[![:space:]]}"}"
 
   mkdir -p "$OUTPUT_DIR"
   if [ "$CLEAR_RETRIEVAL_CACHE" = "1" ]; then

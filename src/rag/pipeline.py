@@ -117,7 +117,7 @@ class OpenAIGenerator:
     def __init__(self, model: str = "gpt-4.1-mini", cache_path: Optional[str] = None) -> None:
         from openai import OpenAI
 
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         if not api_key:
             raise ValueError("OPENAI_API_KEY is not set.")
 
