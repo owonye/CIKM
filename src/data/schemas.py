@@ -28,6 +28,7 @@ class CandidateScore:
     redundancy: float
     utility: float
     post_consistency: float | None = None
+    predicted_deficit_reduction: float | None = None
     anchor_deficit_reduction: float | None = None
     base_anchor_deficit: float | None = None
     post_anchor_deficit: float | None = None
