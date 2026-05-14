@@ -202,6 +202,52 @@ def summarize_rank_corr(rows: list[dict[str, str]], dataset: str) -> list[dict[s
     return output
 
 
+def summarize_selection_agreement(rows: list[dict[str, str]], dataset: str) -> list[dict[str, object]]:
+    by_query_baseline: dict[tuple[str, str], dict[str, str]] = {}
+    for row in rows:
+        query_key = row.get("query_uid") or row.get("query_id") or ""
+        baseline = row.get("baseline") or ""
+        if query_key and baseline:
+            by_query_baseline[(query_key, baseline)] = row
+
+    output = []
+    proposed_baseline = "stability_aware_selection"
+    comparison_baselines = [
+        "oracle_best_candidate",
+        "selection_no_filter",
+        "selection_no_redundancy",
+        "selection_mean_consistency",
+        "random_selection",
+        "next_ranked_selection",
+    ]
+    proposed_rows = [
+        row
+        for (query_key, baseline), row in by_query_baseline.items()
+        if baseline == proposed_baseline
+        and row.get("reason") == "sufficient_but_unstable"
+        and row.get("selected_doc_id")
+    ]
+    for comparison in comparison_baselines:
+        comparable = []
+        for proposed in proposed_rows:
+            query_key = proposed.get("query_uid") or proposed.get("query_id") or ""
+            other = by_query_baseline.get((query_key, comparison))
+            if other is not None and other.get("selected_doc_id"):
+                comparable.append((proposed, other))
+        same = sum(1 for proposed, other in comparable if proposed.get("selected_doc_id") == other.get("selected_doc_id"))
+        output.append(
+            {
+                "dataset": dataset,
+                "proposed_baseline": proposed_baseline,
+                "comparison_baseline": comparison,
+                "comparable_cases": len(comparable),
+                "same_selection": same,
+                "agreement_rate": same / max(len(comparable), 1),
+            }
+        )
+    return output
+
+
 def row_by_baseline(rows: list[dict[str, object]], baseline: str) -> dict[str, object] | None:
     for row in rows:
         if row.get("baseline") == baseline:
@@ -420,6 +466,7 @@ def main() -> None:
     repair_rows = summarize_repair(rows, args.dataset)
     end_to_end_rows = summarize_end_to_end(rows, args.dataset)
     rank_corr_rows = summarize_rank_corr(rows, args.dataset)
+    selection_agreement_rows = summarize_selection_agreement(rows, args.dataset)
     if args.dataset == "hotpotqa":
         target_sbu_low, target_sbu_high = 0.20, 0.40
     elif args.dataset == "nq":
@@ -534,6 +581,18 @@ def main() -> None:
         output_dir / "candidate_rank_corr.csv",
         rank_corr_rows,
         ["dataset", "baseline", "queries_with_candidate_rankings", "utility_repair_spearman"],
+    )
+    write_csv(
+        output_dir / "selection_agreement.csv",
+        selection_agreement_rows,
+        [
+            "dataset",
+            "proposed_baseline",
+            "comparison_baseline",
+            "comparable_cases",
+            "same_selection",
+            "agreement_rate",
+        ],
     )
     write_csv(
         output_dir / "result_pattern_check.csv",
