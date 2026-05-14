@@ -166,13 +166,15 @@ def evaluate_setting(
         if not feasible_candidates:
             post_consistency_sum += base_consistency
             continue
+        base_deficit = max(gamma - base_consistency, 0.0)
         selected = max(
             feasible_candidates,
-            key=lambda item: item.predicted_deficit_reduction - rho * item.redundancy_penalty,
+            key=lambda item: base_deficit
+            - max(gamma - item.post_consistency, 0.0)
+            - rho * item.redundancy_penalty,
         )
-        base_deficit = max(gamma - base_consistency, 0.0)
         post_deficit = max(gamma - selected.post_consistency, 0.0)
-        utility = selected.predicted_deficit_reduction - rho * selected.redundancy_penalty
+        utility = base_deficit - post_deficit - rho * selected.redundancy_penalty
         post_consistency_sum += selected.post_consistency
         stability_gain_sum += selected.delta_consistency
         selected_utility_sum += utility
