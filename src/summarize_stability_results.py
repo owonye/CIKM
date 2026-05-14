@@ -144,7 +144,7 @@ def summarize_repair(rows: list[dict[str, str]], dataset: str) -> list[dict[str,
                 "post_consistency": sum(safe_float(row.get("post_selection_consistency")) for row in group) / max(count, 1),
                 "answer_variance_proxy": sum(1.0 - safe_float(row.get("post_selection_consistency")) for row in group) / max(count, 1),
                 "diagnostic_generations": sum(safe_float(row.get("diagnostic_generations")) for row in group) / max(count, 1),
-                "utility_gain_spearman": sum(spearman_values) / max(len(spearman_values), 1) if spearman_values else "",
+                "utility_repair_spearman": sum(spearman_values) / max(len(spearman_values), 1) if spearman_values else "",
             }
         )
     return output
@@ -196,7 +196,7 @@ def summarize_rank_corr(rows: list[dict[str, str]], dataset: str) -> list[dict[s
                 "dataset": dataset,
                 "baseline": baseline,
                 "queries_with_candidate_rankings": len(values),
-                "utility_gain_spearman": sum(values) / max(len(values), 1) if values else "",
+                "utility_repair_spearman": sum(values) / max(len(values), 1) if values else "",
             }
         )
     return output
@@ -479,7 +479,7 @@ def main() -> None:
             "post_consistency",
             "answer_variance_proxy",
             "diagnostic_generations",
-            "utility_gain_spearman",
+            "utility_repair_spearman",
         ],
     )
     write_csv(
@@ -495,7 +495,7 @@ def main() -> None:
             "post_consistency",
             "answer_variance_proxy",
             "diagnostic_generations",
-            "utility_gain_spearman",
+            "utility_repair_spearman",
         ],
     )
     write_csv(
@@ -533,7 +533,7 @@ def main() -> None:
     write_csv(
         output_dir / "candidate_rank_corr.csv",
         rank_corr_rows,
-        ["dataset", "baseline", "queries_with_candidate_rankings", "utility_gain_spearman"],
+        ["dataset", "baseline", "queries_with_candidate_rankings", "utility_repair_spearman"],
     )
     write_csv(
         output_dir / "result_pattern_check.csv",
