@@ -1373,8 +1373,27 @@ def _iter_text_contexts(item: dict) -> List[tuple[str, str]]:
                 if not isinstance(entry, dict):
                     continue
                 title = entry.get("title") or entry.get("url") or f"passage_{idx}"
-                text = entry.get("search_context") or entry.get("description") or entry.get("text")
+                text = (
+                    entry.get("search_context")
+                    or entry.get("wiki_context")
+                    or entry.get("description")
+                    or entry.get("text")
+                )
                 add(title, text)
+        elif isinstance(raw, dict):
+            titles = raw.get("title") or raw.get("titles") or raw.get("url") or raw.get("filename")
+            texts = (
+                raw.get("search_context")
+                or raw.get("wiki_context")
+                or raw.get("description")
+                or raw.get("text")
+                or raw.get("contexts")
+            )
+            if isinstance(titles, list) and isinstance(texts, list):
+                for idx, (title, text) in enumerate(zip(titles, texts)):
+                    add(title or f"passage_{idx}", text)
+            elif texts is not None:
+                add(key, texts)
 
     return contexts
 
@@ -1465,7 +1484,7 @@ def load_musique_queries(start: int = 0, limit: int = 5, split: str = "validatio
 def load_triviaqa_sample(start: int = 0, limit: int = 50, split: str = "validation") -> List[dict]:
     return _load_open_qa_sample(
         "triviaqa",
-        [("trivia_qa", "rc.nocontext"), ("trivia_qa", "rc")],
+        [("trivia_qa", "rc"), ("trivia_qa", "rc.nocontext")],
         start,
         limit,
         split,
