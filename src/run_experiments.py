@@ -26,7 +26,7 @@ def parse_sizes(raw: str) -> list[int]:
 
 def run_command(command: list[str]) -> None:
     printable = " ".join(command)
-    print(f"[RUN] {printable}")
+    print(f"[RUN] {printable}", flush=True)
     subprocess.run(command, check=True)
 
 
@@ -80,6 +80,14 @@ def main() -> None:
     parser.add_argument("--tail-level", type=float, default=1.0)
     parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
     parser.add_argument("--utility-rho", type=float, default=0.1)
+    parser.add_argument("--utility-alpha", type=float, default=0.0)
+    parser.add_argument("--utility-beta", type=float, default=0.0)
+    parser.add_argument("--stability-gamma-grid", default="")
+    parser.add_argument("--stability-rho-grid", default="")
+    parser.add_argument("--stability-alpha-grid", default="")
+    parser.add_argument("--stability-beta-grid", default="")
+    parser.add_argument("--stability-epsilon-f-grid", default="")
+    parser.add_argument("--stability-tail-grid", default="")
     parser.add_argument("--confidence-threshold", type=float, default=0.88)
     parser.add_argument("--weak-support-overlap-threshold", type=float, default=0.2)
     parser.add_argument("--label-strategy", choices=["evidence", "hybrid_generation"], default="evidence")
@@ -178,6 +186,8 @@ def main() -> None:
                 "tail_level": args.tail_level,
                 "sufficiency_tolerance": args.sufficiency_tolerance,
                 "utility_rho": args.utility_rho,
+                "utility_alpha": args.utility_alpha,
+                "utility_beta": args.utility_beta,
                 "label_strategy": args.label_strategy,
                 "embedding_model": args.embedding_model,
                 "nq_max_tokens": args.nq_max_tokens,
@@ -298,6 +308,18 @@ def main() -> None:
                 "--output",
                 str(stability_calib_path),
             ]
+            if args.stability_gamma_grid:
+                stability_calibrate_cmd.extend(["--gamma-grid", args.stability_gamma_grid])
+            if args.stability_rho_grid:
+                stability_calibrate_cmd.extend(["--rho-grid", args.stability_rho_grid])
+            if args.stability_alpha_grid:
+                stability_calibrate_cmd.extend(["--alpha-grid", args.stability_alpha_grid])
+            if args.stability_beta_grid:
+                stability_calibrate_cmd.extend(["--beta-grid", args.stability_beta_grid])
+            if args.stability_epsilon_f_grid:
+                stability_calibrate_cmd.extend(["--epsilon-f-grid", args.stability_epsilon_f_grid])
+            if args.stability_tail_grid:
+                stability_calibrate_cmd.extend(["--tail-grid", args.stability_tail_grid])
             if args.use_openai:
                 stability_calibrate_cmd.extend(
                     [
@@ -353,6 +375,10 @@ def main() -> None:
             str(args.sufficiency_tolerance),
             "--utility-rho",
             str(args.utility_rho),
+            "--utility-alpha",
+            str(args.utility_alpha),
+            "--utility-beta",
+            str(args.utility_beta),
             "--confidence-threshold",
             str(args.confidence_threshold),
             "--weak-support-overlap-threshold",

@@ -171,6 +171,8 @@ def resolve_manifest_overrides(args: argparse.Namespace) -> argparse.Namespace:
     args.tail_level = float(manifest.get("tail_level", args.tail_level))
     args.sufficiency_tolerance = float(manifest.get("sufficiency_tolerance", args.sufficiency_tolerance))
     args.utility_rho = float(manifest.get("utility_rho", getattr(args, "utility_rho", 0.1)))
+    args.utility_alpha = float(manifest.get("utility_alpha", getattr(args, "utility_alpha", 0.0)))
+    args.utility_beta = float(manifest.get("utility_beta", getattr(args, "utility_beta", 0.0)))
     args.embedding_model = str(manifest["embedding_model"])
     args.seed = int(manifest["seed"])
     args.retrieval_cache_dir = str(manifest.get("retrieval_cache_dir", args.retrieval_cache_dir))
@@ -347,6 +349,8 @@ def apply_stability_calibration(args: argparse.Namespace) -> argparse.Namespace:
     args.tail_level = float(best.get("tail_level", args.tail_level))
     args.sufficiency_tolerance = float(best.get("sufficiency_tolerance", args.sufficiency_tolerance))
     args.utility_rho = float(best.get("utility_rho", getattr(args, "utility_rho", 0.1)))
+    args.utility_alpha = float(best.get("utility_alpha", getattr(args, "utility_alpha", 0.0)))
+    args.utility_beta = float(best.get("utility_beta", getattr(args, "utility_beta", 0.0)))
     return args
 
 
@@ -515,6 +519,8 @@ def run_stability_aware_selection(
     candidate_pool_k: int = 8,
     stability_threshold: float = 0.8,
     utility_rho: float = 0.1,
+    utility_alpha: float = 0.0,
+    utility_beta: float = 0.0,
     tail_level: float = 1.0,
     sufficiency_tolerance: float = 0.0,
     enforce_sufficiency_filter: bool = True,
@@ -532,6 +538,8 @@ def run_stability_aware_selection(
         candidate_pool_k=candidate_pool_k,
         stability_threshold=stability_threshold,
         utility_rho=utility_rho,
+        utility_alpha=utility_alpha,
+        utility_beta=utility_beta,
         tail_level=tail_level,
         sufficiency_tolerance=sufficiency_tolerance,
         enforce_sufficiency_filter=enforce_sufficiency_filter,
@@ -568,6 +576,7 @@ def run_stability_aware_selection(
         "candidate_delta_sufficiency": result["candidate_delta_sufficiency"],
         "candidate_delta_consistency": result["candidate_delta_consistency"],
         "candidate_redundancy_penalty": result["candidate_redundancy_penalty"],
+        "candidate_query_support": result.get("candidate_query_support"),
         "anchor_deficit_reduction": result["anchor_deficit_reduction"],
         "tail_level": result["tail_level"],
         "sufficiency_tolerance": result["sufficiency_tolerance"],
@@ -614,6 +623,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
                 "candidate_delta_sufficiency",
                 "candidate_delta_consistency",
                 "candidate_redundancy_penalty",
+                "candidate_query_support",
                 "anchor_deficit_reduction",
                 "tail_level",
                 "sufficiency_tolerance",
@@ -671,6 +681,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
         "base_anchor_deficit",
         "post_anchor_deficit",
         "redundancy",
+        "query_support",
         "utility",
         "post_consistency",
         "feasible",
@@ -703,6 +714,7 @@ def write_results(rows: list[dict[str, Any]], output_path: Path) -> None:
                     "base_anchor_deficit": detail.get("base_anchor_deficit"),
                     "post_anchor_deficit": detail.get("post_anchor_deficit"),
                     "redundancy": detail.get("redundancy_penalty"),
+                    "query_support": detail.get("query_support"),
                     "utility": detail.get("utility"),
                     "post_consistency": detail.get("post_consistency"),
                     "feasible": detail.get("feasible"),
@@ -750,6 +762,8 @@ def main() -> None:
     parser.add_argument("--tail-level", type=float, default=1.0)
     parser.add_argument("--sufficiency-tolerance", type=float, default=0.0)
     parser.add_argument("--utility-rho", type=float, default=0.1)
+    parser.add_argument("--utility-alpha", type=float, default=0.0)
+    parser.add_argument("--utility-beta", type=float, default=0.0)
     parser.add_argument("--weak-support-overlap-threshold", type=float, default=0.2)
     parser.add_argument("--confidence-threshold", type=float, default=0.88)
     parser.add_argument("--manifest-path", default="")
@@ -793,7 +807,8 @@ def main() -> None:
         progress = (completed / total) * 100
         print(
             f"[PROGRESS] {stage}: {completed}/{total} ({progress:.1f}%) "
-            f"elapsed={_format_eta(elapsed)} eta={_format_eta(eta)}"
+            f"elapsed={_format_eta(elapsed)} eta={_format_eta(eta)}",
+            flush=True,
         )
 
     _, queries, simple_retriever, _, generator = build_resources(args)
@@ -926,6 +941,8 @@ def main() -> None:
                     candidate_pool_k=args.candidate_pool_k,
                     stability_threshold=args.stability_threshold,
                     utility_rho=utility_rho,
+                    utility_alpha=args.utility_alpha,
+                    utility_beta=args.utility_beta,
                     tail_level=1.0 if baseline_name == "selection_mean_consistency" else args.tail_level,
                     sufficiency_tolerance=args.sufficiency_tolerance,
                     enforce_sufficiency_filter=baseline_name != "selection_no_filter",

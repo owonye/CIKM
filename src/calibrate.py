@@ -306,7 +306,8 @@ def main() -> None:
         progress = (completed / total) * 100
         print(
             f"[PROGRESS] {stage}: {completed}/{total} ({progress:.1f}%) "
-            f"elapsed={_format_eta(elapsed)} eta={_format_eta(eta)}"
+            f"elapsed={_format_eta(elapsed)} eta={_format_eta(eta)}",
+            flush=True,
         )
 
     queries, retriever = build_resources(

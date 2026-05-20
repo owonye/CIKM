@@ -34,6 +34,21 @@ def format_eta(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def make_json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [make_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [make_json_safe(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
 def maybe_log_progress(stage: str, completed: int, total: int, started_at: float) -> None:
     if total <= 0:
         return
@@ -45,7 +60,8 @@ def maybe_log_progress(stage: str, completed: int, total: int, started_at: float
     eta = (total - completed) / rate if rate > 0 else 0.0
     print(
         f"[PROGRESS] {stage}: {completed}/{total} ({completed / total * 100:.1f}%) "
-        f"elapsed={format_eta(elapsed)} eta={format_eta(eta)}"
+        f"elapsed={format_eta(elapsed)} eta={format_eta(eta)}",
+        flush=True,
     )
 
 
@@ -139,6 +155,8 @@ def evaluate_setting(
     records: list[dict[str, Any]],
     gamma: float,
     rho: float,
+    alpha: float,
+    beta: float,
     sufficiency_tolerance: float,
 ) -> dict[str, Any]:
     stable_count = 0
@@ -171,10 +189,18 @@ def evaluate_setting(
             feasible_candidates,
             key=lambda item: base_deficit
             - max(gamma - item.post_consistency, 0.0)
+            + alpha * item.delta_sufficiency
+            + beta * getattr(item, "query_support", 0.0)
             - rho * item.redundancy_penalty,
         )
         post_deficit = max(gamma - selected.post_consistency, 0.0)
-        utility = base_deficit - post_deficit - rho * selected.redundancy_penalty
+        utility = (
+            base_deficit
+            - post_deficit
+            + alpha * selected.delta_sufficiency
+            + beta * getattr(selected, "query_support", 0.0)
+            - rho * selected.redundancy_penalty
+        )
         post_consistency_sum += selected.post_consistency
         stability_gain_sum += selected.delta_consistency
         selected_utility_sum += utility
@@ -192,6 +218,8 @@ def evaluate_setting(
     return {
         "stability_threshold": gamma,
         "utility_rho": rho,
+        "utility_alpha": alpha,
+        "utility_beta": beta,
         "sufficiency_tolerance": sufficiency_tolerance,
         "objective": objective,
         "sufficient_with_candidates": len(records),
@@ -244,6 +272,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gamma-grid", default="0.6,0.7,0.8,0.9")
     parser.add_argument("--rho-grid", default="0.0,0.1,0.2")
+    parser.add_argument("--alpha-grid", default="0.0")
+    parser.add_argument("--beta-grid", default="0.0")
     parser.add_argument("--epsilon-f-grid", default="0.0,0.02,0.05")
     parser.add_argument("--output", default="results/stability_calib.json")
     args = parser.parse_args()
@@ -254,6 +284,8 @@ def main() -> None:
 
     gamma_grid = parse_float_grid(args.gamma_grid)
     rho_grid = parse_float_grid(args.rho_grid)
+    alpha_grid = parse_float_grid(args.alpha_grid)
+    beta_grid = parse_float_grid(args.beta_grid)
     epsilon_f_grid = parse_float_grid(args.epsilon_f_grid)
     tail_grid = parse_float_grid(args.tail_grid) if args.tail_grid else [args.tail_level]
 
@@ -264,20 +296,28 @@ def main() -> None:
         args.tail_level = tail_level
         records, metadata = build_candidate_records(args)
         metadata_by_tail[str(tail_level)] = metadata
-        for gamma, rho, epsilon_f in product(gamma_grid, rho_grid, epsilon_f_grid):
-            result = evaluate_setting(records, gamma=gamma, rho=rho, sufficiency_tolerance=epsilon_f)
+        for gamma, rho, alpha, beta, epsilon_f in product(gamma_grid, rho_grid, alpha_grid, beta_grid, epsilon_f_grid):
+            result = evaluate_setting(
+                records,
+                gamma=gamma,
+                rho=rho,
+                alpha=alpha,
+                beta=beta,
+                sufficiency_tolerance=epsilon_f,
+            )
             result["tail_level"] = tail_level
             all_results.append(result)
             if best is None or result["objective"] > best["objective"]:
                 best = result
 
-    payload = {
+    payload = make_json_safe({
         "best": best,
         "grid_results": all_results,
         "metadata": metadata_by_tail,
         "args": vars(args),
         "prompt_template_version": GENERATOR_PROMPT_VERSION,
-    }
+    })
+    best = payload["best"]
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -286,7 +326,7 @@ def main() -> None:
         {
             "script": "calibrate_stability.py",
             "args": vars(args),
-            "metadata": metadata_by_tail,
+            "metadata": payload["metadata"],
             "best": best,
             "output": str(output_path),
         },

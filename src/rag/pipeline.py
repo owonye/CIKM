@@ -20,7 +20,7 @@ CONTENT_STOPWORDS = {
     "and", "or", "with", "by", "from", "as", "at",
 }
 SUPPORTIVENESS_LAMBDA = 0.5
-GENERATOR_PROMPT_VERSION = "short_answer_v2"
+GENERATOR_PROMPT_VERSION = "short_answer_v3"
 
 
 @dataclass
@@ -73,6 +73,7 @@ class CandidateUtility:
     delta_consistency: float
     redundancy_penalty: float
     post_consistency: float
+    query_support: float = 0.0
     anchor_deficit_reduction: float = 0.0
     base_anchor_deficit: float = 0.0
     post_anchor_deficit: float = 0.0
@@ -214,6 +215,104 @@ class OpenAIGenerator:
         return output
 
 
+def _clean_hf_short_answer(output: str) -> str:
+    text = output.strip()
+    if not text:
+        return ""
+
+    # Some instruction-tuned local models continue with explanations or echo the
+    # next prompt turn. Keep only the first answer-like span.
+    cut_markers = [
+        "\nHuman:",
+        "\nUser:",
+        "\nQuestion:",
+        "\nEvidence:",
+        "\nExplanation:",
+        "\nLong answer:",
+        "\nShort answer:",
+        "\nFinal answer:",
+        "\nAssistant:",
+        "\nA:",
+        "<|im_end|>",
+        "<end_of_turn>",
+    ]
+    for marker in cut_markers:
+        index = text.find(marker)
+        if index != -1:
+            text = text[:index].strip()
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[\-\*\u2022\s]+", "", line).strip()
+        line = re.sub(
+            r"^(short\s+answer|final\s+answer|answer|assistant|a)\s*:\s*",
+            "",
+            line,
+            flags=re.IGNORECASE,
+        ).strip()
+        line = re.sub(r"^(the\s+answer\s+is|answer\s+is|it\s+is|it's)\s+", "", line, flags=re.IGNORECASE).strip()
+        line = line.strip(" \t\"'`")
+        if re.fullmatch(r"(unknown|not\s+known|not\s+specified|not\s+provided)[\.\s]*", line, flags=re.IGNORECASE):
+            return "unknown"
+        if len(line.split()) > 12:
+            line = re.split(r"\s+(?:because|therefore|so|from the evidence)\s+", line, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+            sentences = re.split(r"(?<=[.!?])\s+", line, maxsplit=1)
+            if sentences:
+                line = sentences[0].strip()
+        if len(line) > 1 and line.endswith(".") and not re.search(r"\b[A-Z](?:\.[A-Z])+\.?$", line):
+            line = line[:-1].strip()
+        if line:
+            return line
+    return text
+
+
+def _content_terms(text: str) -> set[str]:
+    terms = set()
+    for token in re.findall(r"[A-Za-z0-9]+", text.lower()):
+        if len(token) <= 2 or token in CONTENT_STOPWORDS:
+            continue
+        terms.add(token)
+    return terms
+
+
+def _split_sentences(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return []
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", normalized) if part.strip()]
+
+
+def _compact_text_for_query(text: str, query_text: str, max_chars: int) -> str:
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if len(normalized) <= max_chars:
+        return normalized
+
+    terms = _content_terms(query_text)
+    sentences = _split_sentences(normalized)
+    if not sentences:
+        return normalized[:max_chars].strip()
+
+    scored: list[tuple[int, int, str]] = []
+    for index, sentence in enumerate(sentences):
+        sentence_terms = _content_terms(sentence)
+        overlap = len(terms & sentence_terms)
+        scored.append((overlap, index, sentence))
+
+    selected_indexes = {0}
+    for overlap, index, _ in sorted(scored, key=lambda item: (-item[0], item[1])):
+        if overlap <= 0 and len(selected_indexes) > 1:
+            break
+        selected_indexes.add(index)
+        candidate = " ".join(sentences[i] for i in sorted(selected_indexes))
+        if len(candidate) >= max_chars:
+            break
+
+    compact = " ".join(sentences[i] for i in sorted(selected_indexes))
+    return compact[:max_chars].strip()
+
+
 class HFGenerator:
     """
     Local Hugging Face causal LM generator.
@@ -226,40 +325,151 @@ class HFGenerator:
 
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
+        requested_input_max = int(os.getenv("HF_INPUT_MAX_TOKENS", "8192"))
+        self.doc_max_chars = int(os.getenv("HF_DOC_MAX_CHARS", "1800"))
+        self._disable_kv_cache = "phi-3" in model_id.lower()
+        self._cache: dict[str, str] = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.cache_path = os.getenv("HF_CACHE_PATH", "")
+        if self.cache_path:
+            self._load_disk_cache()
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        tokenizer_limit = getattr(self.tokenizer, "model_max_length", requested_input_max)
+        if not isinstance(tokenizer_limit, int) or tokenizer_limit <= 0 or tokenizer_limit > 1_000_000:
+            tokenizer_limit = requested_input_max
+        self.input_max_tokens = min(requested_input_max, tokenizer_limit)
+        model_kwargs = {
+            "torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            "device_map": "auto",
+            "trust_remote_code": True,
+        }
+        if self._disable_kv_cache:
+            model_kwargs["attn_implementation"] = "eager"
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto",
-            trust_remote_code=True,
+            **model_kwargs,
         )
+        if self._disable_kv_cache:
+            self.model.config.use_cache = False
+        self.model.eval()
+
+    def _load_disk_cache(self) -> None:
+        path = Path(self.cache_path)
+        if not path.exists():
+            return
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = entry.get("key")
+                value = entry.get("value")
+                if isinstance(key, str) and isinstance(value, str):
+                    self._cache[key] = value
+
+    def _append_disk_cache(self, key: str, value: str) -> None:
+        path = Path(self.cache_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"key": key, "value": value}, ensure_ascii=False) + "\n")
 
     def get_cache_stats(self) -> dict[str, int]:
-        # Keep interface compatibility with OpenAIGenerator for metadata logging.
-        return {"cache_hits": 0, "cache_misses": 0, "cache_size": 0}
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "cache_size": len(self._cache),
+        }
 
-    def generate(self, query: Query, evidence: List[RetrievedDocument]) -> str:
-        context = "\n\n".join(f"[{doc.doc_id}] {doc.text}" for doc in evidence)
-        prompt = (
-            "Answer the question using only the provided evidence.\n"
-            "Return only the shortest answer span or phrase. Do not write a sentence unless the answer requires it.\n"
-            "If the evidence does not contain the answer, return exactly: unknown\n\n"
+    def _cache_key(self, query: Query, evidence: List[RetrievedDocument]) -> str:
+        ids = "|".join(doc.doc_id for doc in evidence)
+        return f"{GENERATOR_PROMPT_VERSION}::{self.model_id}::{self.input_max_tokens}::{self.doc_max_chars}::{query.text}::{ids}"
+
+    def _build_context(self, query: Query, evidence: List[RetrievedDocument], doc_max_chars: int) -> str:
+        chunks = []
+        for doc in evidence:
+            text = _compact_text_for_query(doc.text, query.text, doc_max_chars)
+            chunks.append(f"[{doc.doc_id}] {text}")
+        return "\n\n".join(chunks)
+
+    def _build_prompt(self, query: Query, evidence: List[RetrievedDocument], doc_max_chars: int) -> str:
+        context = self._build_context(query, evidence, doc_max_chars)
+        instruction = (
+            "Answer using only the provided evidence. Return the shortest answer span or phrase. "
+            "Do not write an explanation, citation, or label. "
+            "If the evidence does not contain the answer, return exactly: unknown. "
+            "Valid outputs look like: Paris; June 30, 1985; unknown."
+        )
+        user_prompt = (
             f"Question: {query.text}\n\n"
             f"Evidence:\n{context}\n\n"
-            "Short answer:"
+            "Answer:"
         )
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        outputs = self.model.generate(
-            **inputs,
-            max_new_tokens=self.max_new_tokens,
-            do_sample=False,
-            temperature=None,
-            top_p=None,
-            eos_token_id=self.tokenizer.eos_token_id,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
+        if getattr(self.tokenizer, "chat_template", None):
+            return self.tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": instruction},
+                    {"role": "user", "content": user_prompt},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        return f"{instruction}\n\n{user_prompt}"
+
+    def generate(self, query: Query, evidence: List[RetrievedDocument]) -> str:
+        import torch
+
+        key = self._cache_key(query, evidence)
+        cached = self._cache.get(key)
+        if cached is not None:
+            self.cache_hits += 1
+            return cached
+        self.cache_misses += 1
+
+        prompt = self._build_prompt(query, evidence, self.doc_max_chars)
+        token_count = len(self.tokenizer(prompt, add_special_tokens=False)["input_ids"])
+        fallback_doc_sizes = [
+            size
+            for size in (2400, 1800, 1500, 1200, 900, 600, 400, 250)
+            if size < self.doc_max_chars
+        ]
+        for doc_max_chars in fallback_doc_sizes:
+            if token_count <= self.input_max_tokens:
+                break
+            prompt = self._build_prompt(query, evidence, doc_max_chars)
+            token_count = len(self.tokenizer(prompt, add_special_tokens=False)["input_ids"])
+        if token_count > self.input_max_tokens:
+            prompt = self._build_prompt(query, evidence, 160)
+            token_count = len(self.tokenizer(prompt, add_special_tokens=False)["input_ids"])
+
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=token_count > self.input_max_tokens,
+            max_length=self.input_max_tokens,
+        ).to(self.model.device)
+        with torch.inference_mode():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                temperature=None,
+                top_p=None,
+                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.eos_token_id,
+                use_cache=not self._disable_kv_cache,
+            )
         gen_tokens = outputs[0][inputs["input_ids"].shape[1] :]
-        return self.tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+        decoded = self.tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+        output = _clean_hf_short_answer(decoded)
+        self._cache[key] = output
+        if self.cache_path:
+            self._append_disk_cache(key, output)
+        return output
 
 
 class FaissRetriever:
@@ -796,6 +1006,8 @@ class StabilityAwareEvidenceSelector:
         candidate_pool_k: int = 8,
         stability_threshold: float = 0.8,
         utility_rho: float = 0.1,
+        utility_alpha: float = 0.0,
+        utility_beta: float = 0.0,
         tail_level: float = 1.0,
         sufficiency_tolerance: float = 0.0,
         enforce_sufficiency_filter: bool = True,
@@ -810,6 +1022,8 @@ class StabilityAwareEvidenceSelector:
         self.candidate_pool_k = max(candidate_pool_k, expanded_k, initial_k + 1)
         self.stability_threshold = stability_threshold
         self.utility_rho = utility_rho
+        self.utility_alpha = utility_alpha
+        self.utility_beta = utility_beta
         self.tail_level = tail_level
         self.sufficiency_tolerance = sufficiency_tolerance
         self.enforce_sufficiency_filter = enforce_sufficiency_filter
@@ -845,11 +1059,17 @@ class StabilityAwareEvidenceSelector:
         delta_sufficiency = post_score - base_score
         delta_consistency = post_consistency - base_consistency
         redundancy_penalty = compute_lexical_redundancy(candidate, docs)
+        query_support = compute_query_overlap(query, candidate)
         base_deficit = anchor_deficit(base_consistency, self.stability_threshold)
         post_deficit = anchor_deficit(post_consistency, self.stability_threshold)
         deficit_reduction = base_deficit - post_deficit
         feasible = post_score >= self.estimator.threshold - self.sufficiency_tolerance
-        utility = deficit_reduction - self.utility_rho * redundancy_penalty
+        utility = (
+            deficit_reduction
+            + self.utility_alpha * delta_sufficiency
+            + self.utility_beta * query_support
+            - self.utility_rho * redundancy_penalty
+        )
         return CandidateUtility(
             candidate_doc_id=candidate.doc_id,
             utility=utility,
@@ -857,6 +1077,7 @@ class StabilityAwareEvidenceSelector:
             delta_consistency=delta_consistency,
             redundancy_penalty=redundancy_penalty,
             post_consistency=post_consistency,
+            query_support=query_support,
             anchor_deficit_reduction=deficit_reduction,
             base_anchor_deficit=base_deficit,
             post_anchor_deficit=post_deficit,
@@ -882,6 +1103,7 @@ class StabilityAwareEvidenceSelector:
 
     def _infeasible_candidate_details(
         self,
+        query: Query,
         candidates: List[RetrievedDocument],
         post_scores: dict[str, float],
         base_score: float,
@@ -893,6 +1115,7 @@ class StabilityAwareEvidenceSelector:
                 "delta_sufficiency": post_scores.get(candidate.doc_id, base_score) - base_score,
                 "delta_consistency": None,
                 "redundancy_penalty": None,
+                "query_support": compute_query_overlap(query, candidate),
                 "post_consistency": None,
                 "anchor_deficit_reduction": None,
                 "base_anchor_deficit": None,
@@ -933,6 +1156,7 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_sufficiency": None,
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
+                "candidate_query_support": None,
                 "candidate_details": [],
                 "anchor_deficit_reduction": None,
                 "tail_level": self.tail_level,
@@ -971,6 +1195,7 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_sufficiency": None,
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
+                "candidate_query_support": None,
                 "candidate_details": [],
                 "anchor_deficit_reduction": 0.0,
                 "tail_level": self.tail_level,
@@ -1012,6 +1237,7 @@ class StabilityAwareEvidenceSelector:
                 "candidate_delta_sufficiency": None,
                 "candidate_delta_consistency": None,
                 "candidate_redundancy_penalty": None,
+                "candidate_query_support": None,
                 "candidate_details": [],
                 "anchor_deficit_reduction": base_deficit - post_deficit,
                 "tail_level": self.tail_level,
@@ -1032,6 +1258,7 @@ class StabilityAwareEvidenceSelector:
             eligible_ids = {candidate.doc_id for candidate in eligible_candidates}
             infeasible_candidates = [candidate for candidate in candidates if candidate.doc_id not in eligible_ids]
             infeasible_details = self._infeasible_candidate_details(
+                query,
                 infeasible_candidates,
                 post_scores,
                 decision.sufficiency_score,
@@ -1061,6 +1288,7 @@ class StabilityAwareEvidenceSelector:
                     "candidate_delta_sufficiency": None,
                     "candidate_delta_consistency": None,
                     "candidate_redundancy_penalty": None,
+                    "candidate_query_support": None,
                     "candidate_details": infeasible_details,
                     "anchor_deficit_reduction": None,
                     "tail_level": self.tail_level,
@@ -1147,6 +1375,7 @@ class StabilityAwareEvidenceSelector:
             "candidate_delta_sufficiency": selected_utility.delta_sufficiency,
             "candidate_delta_consistency": selected_utility.delta_consistency,
             "candidate_redundancy_penalty": selected_utility.redundancy_penalty,
+            "candidate_query_support": selected_utility.query_support,
             "anchor_deficit_reduction": selected_utility.anchor_deficit_reduction,
             "tail_level": self.tail_level,
             "sufficiency_tolerance": self.sufficiency_tolerance,
@@ -1157,6 +1386,7 @@ class StabilityAwareEvidenceSelector:
                     "delta_sufficiency": item.delta_sufficiency,
                     "delta_consistency": item.delta_consistency,
                     "redundancy_penalty": item.redundancy_penalty,
+                    "query_support": item.query_support,
                     "post_consistency": item.post_consistency,
                     "anchor_deficit_reduction": item.anchor_deficit_reduction,
                     "base_anchor_deficit": item.base_anchor_deficit,

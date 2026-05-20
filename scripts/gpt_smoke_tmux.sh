@@ -9,6 +9,31 @@ OUTPUT_DIR="${OUTPUT_DIR:-results/gpt_smoke}"
 RUN_SUFFIX="${RUN_SUFFIX:-}"
 RETRIEVAL_CACHE_DIR="${RETRIEVAL_CACHE_DIR:-$OUTPUT_DIR/cache_shared}"
 CLEAR_RETRIEVAL_CACHE="${CLEAR_RETRIEVAL_CACHE:-0}"
+CANDIDATE_POOL_K="${CANDIDATE_POOL_K:-8}"
+TAIL_LEVEL="${TAIL_LEVEL:-0.5}"
+UTILITY_RHO="${UTILITY_RHO:-0.1}"
+UTILITY_ALPHA="${UTILITY_ALPHA:-0.0}"
+UTILITY_BETA="${UTILITY_BETA:-0.0}"
+STABILITY_RHO_GRID="${STABILITY_RHO_GRID:-$UTILITY_RHO}"
+STABILITY_ALPHA_GRID="${STABILITY_ALPHA_GRID:-$UTILITY_ALPHA}"
+STABILITY_BETA_GRID="${STABILITY_BETA_GRID:-$UTILITY_BETA}"
+STABILITY_TAIL_GRID="${STABILITY_TAIL_GRID:-$TAIL_LEVEL}"
+INSTALL_REQUIREMENTS="${INSTALL_REQUIREMENTS:-1}"
+CHECK_TORCH_CUDA="${CHECK_TORCH_CUDA:-0}"
+
+check_torch_cuda() {
+  if [ "$CHECK_TORCH_CUDA" != "1" ]; then
+    return
+  fi
+  python - <<'PY'
+import torch
+print("[INFO] torch:", torch.__version__)
+print("[INFO] cuda available:", torch.cuda.is_available())
+print("[INFO] torch cuda:", torch.version.cuda)
+print("[INFO] device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)
+raise SystemExit(0 if torch.cuda.is_available() else 1)
+PY
+}
 
 run_smoke() {
   cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -17,8 +42,11 @@ run_smoke() {
     python3 -m venv .venv
   fi
   source .venv/bin/activate
-  python -m pip install --upgrade pip
-  python -m pip install -r requirements.txt
+  if [ "$INSTALL_REQUIREMENTS" = "1" ]; then
+    python -m pip install --upgrade pip
+    python -m pip install -r requirements.txt
+  fi
+  check_torch_cuda
 
   if [ ! -f .env ]; then
     echo "Missing .env with OPENAI_API_KEY" >&2
@@ -60,9 +88,16 @@ run_smoke() {
       --query-split validation \
       --initial-k 3 \
       --expanded-k "$expanded_k" \
-      --candidate-pool-k 8 \
-      --tail-level 0.5 \
+      --candidate-pool-k "$CANDIDATE_POOL_K" \
+      --tail-level "$TAIL_LEVEL" \
       --sufficiency-tolerance 0.02 \
+      --utility-rho "$UTILITY_RHO" \
+      --utility-alpha "$UTILITY_ALPHA" \
+      --utility-beta "$UTILITY_BETA" \
+      --stability-rho-grid "$STABILITY_RHO_GRID" \
+      --stability-alpha-grid "$STABILITY_ALPHA_GRID" \
+      --stability-beta-grid "$STABILITY_BETA_GRID" \
+      --stability-tail-grid "$STABILITY_TAIL_GRID" \
       --label-strategy evidence \
       --use-openai \
       --openai-model "$MODEL" \
@@ -94,7 +129,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 0
 fi
 
-tmux new-session -d -s "$SESSION" "cd \"$(pwd)\" && DATASETS=\"$DATASETS\" SIZE=\"$SIZE\" MODEL=\"$MODEL\" OUTPUT_DIR=\"$OUTPUT_DIR\" RUN_SUFFIX=\"$RUN_SUFFIX\" RETRIEVAL_CACHE_DIR=\"$RETRIEVAL_CACHE_DIR\" CLEAR_RETRIEVAL_CACHE=\"$CLEAR_RETRIEVAL_CACHE\" bash scripts/gpt_smoke_tmux.sh; exec bash"
+tmux new-session -d -s "$SESSION" "cd \"$(pwd)\" && DATASETS=\"$DATASETS\" SIZE=\"$SIZE\" MODEL=\"$MODEL\" OUTPUT_DIR=\"$OUTPUT_DIR\" RUN_SUFFIX=\"$RUN_SUFFIX\" RETRIEVAL_CACHE_DIR=\"$RETRIEVAL_CACHE_DIR\" CLEAR_RETRIEVAL_CACHE=\"$CLEAR_RETRIEVAL_CACHE\" CANDIDATE_POOL_K=\"$CANDIDATE_POOL_K\" TAIL_LEVEL=\"$TAIL_LEVEL\" UTILITY_RHO=\"$UTILITY_RHO\" UTILITY_ALPHA=\"$UTILITY_ALPHA\" UTILITY_BETA=\"$UTILITY_BETA\" STABILITY_RHO_GRID=\"$STABILITY_RHO_GRID\" STABILITY_ALPHA_GRID=\"$STABILITY_ALPHA_GRID\" STABILITY_BETA_GRID=\"$STABILITY_BETA_GRID\" STABILITY_TAIL_GRID=\"$STABILITY_TAIL_GRID\" INSTALL_REQUIREMENTS=\"$INSTALL_REQUIREMENTS\" CHECK_TORCH_CUDA=\"$CHECK_TORCH_CUDA\" bash scripts/gpt_smoke_tmux.sh; exec bash"
 
 echo "Started tmux session: $SESSION"
 echo "Attach with: tmux attach -t $SESSION"
