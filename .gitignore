@@ -24,6 +24,7 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+*.zip
 
 # Logs
 *.log
@@ -66,3 +67,9 @@ gpu_bundle.tar.gz
 rag_plot.py
 rag_tradeoff.pdf
 rag_tradeoff.png
+figures/current_pdf*/
+figures/reference/
+figures/*.pdf
+figures/*.png
+assets/repair_tradeoff.pdf
+assets/repair_tradeoff.png

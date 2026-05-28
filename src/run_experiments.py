@@ -418,6 +418,7 @@ def main() -> None:
                         "vanilla_rag,fixed_large_k_rag,confidence_adaptive_rag,"
                         "structure_aware_adaptive_rag,diagnose_then_expand,"
                         "random_selection,next_ranked_selection,stability_aware_selection,"
+                        "selection_max_sufficiency_gain,selection_max_query_overlap,"
                         "oracle_best_candidate,selection_mean_consistency,selection_no_filter,"
                         "selection_no_redundancy"
                     ),

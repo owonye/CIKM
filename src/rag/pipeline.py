@@ -1335,6 +1335,40 @@ class StabilityAwareEvidenceSelector:
             ]
             selected_utility = max(utilities, key=lambda item: item.anchor_deficit_reduction)
             selected = next(candidate for candidate in eligible_candidates if candidate.doc_id == selected_utility.candidate_doc_id)
+        elif selection_strategy == "max_sufficiency_gain":
+            utilities = [
+                self._candidate_utility(
+                    query,
+                    initial_docs,
+                    candidate,
+                    decision.sufficiency_score,
+                    consistency,
+                    replacement_candidates=[other for other in eligible_candidates if other.doc_id != candidate.doc_id],
+                )
+                for candidate in eligible_candidates
+            ]
+            selected_utility = max(
+                enumerate(utilities),
+                key=lambda item: (item[1].delta_sufficiency, -item[0]),
+            )[1]
+            selected = next(candidate for candidate in eligible_candidates if candidate.doc_id == selected_utility.candidate_doc_id)
+        elif selection_strategy == "max_query_overlap":
+            utilities = [
+                self._candidate_utility(
+                    query,
+                    initial_docs,
+                    candidate,
+                    decision.sufficiency_score,
+                    consistency,
+                    replacement_candidates=[other for other in eligible_candidates if other.doc_id != candidate.doc_id],
+                )
+                for candidate in eligible_candidates
+            ]
+            selected_utility = max(
+                enumerate(utilities),
+                key=lambda item: (item[1].query_support, -item[0]),
+            )[1]
+            selected = next(candidate for candidate in eligible_candidates if candidate.doc_id == selected_utility.candidate_doc_id)
         else:
             utilities = [
                 self._candidate_utility(
@@ -1352,7 +1386,8 @@ class StabilityAwareEvidenceSelector:
 
         final_docs = initial_docs + [selected]
         answer = self.generator.generate(query, final_docs)
-        candidate_scoring_generations = 2 * len(eligible_candidates) if selection_strategy in {"utility", "oracle"} else 2
+        full_scoring_strategies = {"utility", "oracle", "max_sufficiency_gain", "max_query_overlap"}
+        candidate_scoring_generations = 2 * len(eligible_candidates) if selection_strategy in full_scoring_strategies else 2
         return {
             "query": query.text,
             "decision": "select_evidence",

@@ -11,6 +11,8 @@ STABILITY_BASELINES = {
     "random_selection",
     "next_ranked_selection",
     "stability_aware_selection",
+    "selection_max_sufficiency_gain",
+    "selection_max_query_overlap",
     "oracle_best_candidate",
 }
 
@@ -120,6 +122,8 @@ def summarize_repair(rows: list[dict[str, str]], dataset: str) -> list[dict[str,
         "diagnose_then_expand",
         "random_selection",
         "next_ranked_selection",
+        "selection_max_sufficiency_gain",
+        "selection_max_query_overlap",
         "stability_aware_selection",
         "selection_mean_consistency",
         "selection_no_filter",
@@ -217,6 +221,8 @@ def summarize_selection_agreement(rows: list[dict[str, str]], dataset: str) -> l
         "selection_no_filter",
         "selection_no_redundancy",
         "selection_mean_consistency",
+        "selection_max_sufficiency_gain",
+        "selection_max_query_overlap",
         "random_selection",
         "next_ranked_selection",
     ]
