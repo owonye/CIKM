@@ -12,8 +12,8 @@ DATASETS = ["HotpotQA", "MuSiQue", "NQ", "TriviaQA"]
 STOP_RATE = np.array([38.2, 33.7, 49.7, 59.4])
 SBU_RATES = {
     "GPT-4.1-mini": np.array([31.7, 36.5, 41.9, 17.2]),
-    "Gemma": np.array([38.5, 26.4, 45.1, 27.6]),
-    "Qwen": np.array([34.0, 14.8, 40.6, 23.9]),
+    "Gemma-4-E4B-it": np.array([38.5, 26.4, 45.1, 27.6]),
+    "Qwen-2.5-7B-Inst.": np.array([34.0, 14.8, 40.6, 23.9]),
 }
 
 
@@ -23,13 +23,14 @@ def main() -> None:
 
     plt.rcParams.update(
         {
-            "font.family": "DejaVu Sans",
+            "font.family": "serif",
+            "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
             "font.size": 8,
             "axes.labelsize": 8,
             "axes.titlesize": 8,
             "xtick.labelsize": 7,
             "ytick.labelsize": 7,
-            "legend.fontsize": 7,
+            "legend.fontsize": 6.2,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
@@ -83,7 +84,7 @@ def main() -> None:
         bbox_to_anchor=(0.5, 1.18),
         frameon=False,
         handlelength=1.2,
-        columnspacing=0.8,
+        columnspacing=0.55,
     )
 
     fig.tight_layout(pad=0.3)
@@ -121,7 +122,7 @@ def main() -> None:
         bbox_to_anchor=(0.5, 1.18),
         frameon=False,
         handlelength=1.2,
-        columnspacing=1.0,
+        columnspacing=0.6,
     )
 
     fig2.tight_layout(pad=0.3)

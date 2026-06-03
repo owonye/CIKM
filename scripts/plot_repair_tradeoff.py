@@ -99,7 +99,8 @@ def main() -> None:
 
     plt.rcParams.update(
         {
-            "font.family": "DejaVu Sans",
+            "font.family": "serif",
+            "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
             "font.size": 8,
             "axes.labelsize": 8,
             "axes.titlesize": 8,
@@ -152,8 +153,8 @@ def main() -> None:
     ax.text(
         0.585,
         0.337,
-        "+15.1 pp recovery\n+0.083 deficit reduction",
-        fontsize=6.2,
+        "+15.1 percentage points in recovery\n+0.083 deficit reduction",
+        fontsize=5.8,
         color="#555555",
         ha="center",
         va="center",

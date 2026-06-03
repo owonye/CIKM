@@ -1,6 +1,6 @@
 # Stability-Aware Evidence Selection for RAG
 
-This repository contains the experimental code for the CIKM follow-up to STAR: a stability-aware evidence selection controller for retrieval-augmented generation (RAG). The code keeps the STAR-style deterministic sufficiency scorer, then adds a stability gate and targeted repair policy for sufficient-but-unstable evidence.
+This repository contains experimental code for a stability-aware evidence selection controller for retrieval-augmented generation (RAG). The code uses a deterministic sufficiency scorer, then adds a stability gate and targeted repair policy for sufficient-but-unstable evidence.
 
 The main paper path evaluates whether:
 
@@ -20,12 +20,12 @@ src/
   scoring/                     # Sufficiency, stability, and candidate utility scores
   policies/                    # STOP / EXPAND / SELECT policy wrappers
   eval/                        # Metrics, aggregation, and qualitative export helpers
-  calibrate.py                 # Calibrates STAR and confidence thresholds
+  calibrate.py                 # Calibrates sufficiency and confidence thresholds
   calibrate_stability.py       # Calibrates stability threshold and utility weights
   evaluate.py                  # Runs RAG baselines and computes EM/F1
   extract_case_analysis.py     # Extracts representative disagreement cases
   summarize_results.py         # Prints baseline summaries from evaluation CSVs
-  summarize_failure_modes.py   # Aggregates STAR-vs-confidence failure modes
+  summarize_failure_modes.py   # Aggregates sufficiency-vs-confidence failure modes
   summarize_stability_results.py # Exports CIKM stability tables and examples
   run_experiments.py           # End-to-end experiment runner
   rag/                         # Retrieval, signal, and generation utilities
@@ -174,7 +174,7 @@ head -5 "$NQ_DIR"/case_analysis_nq_1000.csv
 
 ## Failure-Mode Analysis
 
-The paper includes an aggregate analysis of cases where the confidence baseline stops but STAR expands.
+The paper includes an aggregate analysis of cases where the confidence baseline stops but the sufficiency baseline expands.
 
 ```bash
 python src/summarize_failure_modes.py \
@@ -189,16 +189,16 @@ python src/summarize_failure_modes.py \
 The script reports:
 
 - confidence premature stops
-- STAR premature stops
-- premature stops corrected by STAR
-- confidence STOP / STAR EXPAND cases
-- breakdowns by STAR reason, such as `high_redundancy` and `mixed_insufficiency`
+- sufficiency-baseline premature stops
+- premature stops corrected by the sufficiency baseline
+- confidence STOP / sufficiency-baseline EXPAND cases
+- breakdowns by sufficiency-baseline reason, such as `high_redundancy` and `mixed_insufficiency`
 
 ## Stability-Aware Evidence Selection
 
 For the CIKM follow-up setting, `evaluate.py` can additionally run stability-aware baselines that diagnose sufficient-but-unstable evidence and select a targeted repair passage:
 
-Sufficiency scoring is implemented as a deterministic lightweight STAR-style pipeline in `src/scoring/sufficiency.py`. `LightweightSufficiencyScorer` returns `relevance`, `coverage`, `supportiveness`, and `redundancy` components in `[0,1]`, applies the calibrated STAR weights, and is shared across the stability-aware baselines during evaluation.
+Sufficiency scoring is implemented as a deterministic lightweight pipeline in `src/scoring/sufficiency.py`. `LightweightSufficiencyScorer` returns `relevance`, `coverage`, `supportiveness`, and `redundancy` components in `[0,1]`, applies calibrated sufficiency weights, and is shared across the stability-aware baselines during evaluation.
 
 Stability-aware selection uses lower-tail anchoring consistency, filters candidates by `F(D + c, q) >= tau - epsilon_F`, and ranks feasible candidates by anchor-deficit reduction:
 

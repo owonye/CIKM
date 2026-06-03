@@ -54,7 +54,7 @@ class ScoreNormalizer:
 
 class LightweightSufficiencyScorer:
     """
-    Deterministic STAR-style scorer shared by all policies.
+    Deterministic sufficiency scorer shared by all policies.
     It performs no LLM judge calls and returns component scores in [0, 1].
     """
 
