@@ -1,6 +1,6 @@
-# Stability-Aware Evidence Selection for RAG
+# Sufficient but Unstable: Stability-Aware Evidence Selection for Anchored Generation in RAG
 
-This repository contains experimental code for a stability-aware evidence selection controller for retrieval-augmented generation (RAG). The code uses a deterministic sufficiency scorer, then adds a stability gate and targeted repair policy for sufficient-but-unstable evidence.
+This repository contains code and scripts for reproducing the experiments in the CIKM 2026 short paper submission. The project implements a stability-aware evidence selection controller for retrieval-augmented generation (RAG): it uses a deterministic sufficiency scorer, then applies a stability gate and targeted repair policy for sufficient-but-unstable evidence.
 
 The main paper path evaluates whether:
 
