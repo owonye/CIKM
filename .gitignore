@@ -73,3 +73,7 @@ figures/*.pdf
 figures/*.png
 assets/repair_tradeoff.pdf
 assets/repair_tradeoff.png
+
+# Local/server experiment launch wrappers
+scripts/*_tmux.sh
+scripts/run_gpt_new_baselines.ps1

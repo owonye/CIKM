@@ -60,8 +60,8 @@ def short(text: str, max_chars: int = 180) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--results-dir", default="results/gpt_new_baselines")
-    parser.add_argument("--cache", default="results/gpt_new_baselines/openai_cache_shared.jsonl")
+    parser.add_argument("--results-dir", default="results/stability_runs")
+    parser.add_argument("--cache", default="results/stability_runs/openai_cache_shared.jsonl")
     parser.add_argument("--dataset", default="")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--require-original-correct", action="store_true")
