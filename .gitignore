@@ -76,5 +76,3 @@ assets/repair_tradeoff.png
 
 # Local experiment scripts
 scripts/*
-!scripts/semantic_agreement_tmux.sh
-!scripts/defense_sanity_checks.py

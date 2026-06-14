@@ -10,6 +10,13 @@ The main paper path evaluates whether:
 - gains come from lower-tail anchoring consistency, sufficiency-preserving candidate filtering, and anchor-deficit reduction
 
 The benchmark suite is HotpotQA, MuSiQue, Natural Questions, and TriviaQA.
+
+## Reproduction Scope
+
+The reproducible experiment path uses tracked files under `src/`, `configs/`,
+and `repro/`. Paper sanity-check helpers are kept in `repro/`, while generated
+outputs are written under `results/`.
+
 ## Repository Layout
 
 ```text
@@ -96,7 +103,13 @@ Overlapping calibration/evaluation slices are rejected unless `--allow-overlap-s
 
 ## Reproducing the Main Runs
 
-### HotpotQA 1000 with Full Ablation
+The commands below reproduce the GPT-4.1-mini paper runs. To run the same
+pipeline with local Hugging Face generators, replace `--use-openai` with
+`--hf-model-id <model-id>`. The paper robustness checks use the same command
+shape for Gemma and Qwen, with the model id recorded in each output metadata
+file.
+
+### HotpotQA 1000
 
 ```bash
 python src/run_experiments.py \
@@ -116,7 +129,27 @@ python src/run_experiments.py \
   --openai-cache-path results/openai_cache_shared.jsonl
 ```
 
-### Natural Questions 1000 with Full Ablation
+### MuSiQue 1000
+
+```bash
+python src/run_experiments.py \
+  --mode musique \
+  --sizes 1000 \
+  --doc-limit 20000 \
+  --corpus-split validation \
+  --query-split validation \
+  --initial-k 3 \
+  --expanded-k 8 \
+  --label-strategy evidence \
+  --use-openai \
+  --run-ablation \
+  --use-run-subdir \
+  --run-name musique-v2-conf-target-final-ablation-1000-clean \
+  --retrieval-cache-dir results/cache_shared \
+  --openai-cache-path results/openai_cache_shared.jsonl
+```
+
+### Natural Questions 1000
 
 ```bash
 python src/run_experiments.py \
@@ -138,15 +171,35 @@ python src/run_experiments.py \
   --openai-cache-path results/openai_cache_shared.jsonl
 ```
 
-The shared retrieval and OpenAI caches are optional but useful for repeated runs.
+### TriviaQA 1000
 
-For MuSiQue and TriviaQA, use the same command shape with `--mode musique` or
-`--mode triviaqa`. TriviaQA uses the same retrieval budget as HotpotQA in the
-paper runs, while Natural Questions uses the chunking arguments shown above.
+```bash
+python src/run_experiments.py \
+  --mode triviaqa \
+  --sizes 1000 \
+  --doc-limit 20000 \
+  --corpus-split validation \
+  --query-split validation \
+  --initial-k 3 \
+  --expanded-k 5 \
+  --label-strategy evidence \
+  --use-openai \
+  --run-ablation \
+  --use-run-subdir \
+  --run-name triviaqa-v2-k5-conf-target-final-ablation-1000-clean \
+  --retrieval-cache-dir results/cache_shared \
+  --openai-cache-path results/openai_cache_shared.jsonl
+```
+
+The shared retrieval and OpenAI caches are optional but useful for repeated
+runs. Output metadata records the exact model version, prompt version,
+retrieval cache path, OpenAI cache path, calibration source, and run settings.
 
 ## Summarizing Results
 
-After a run finishes, summarize the latest matching output directory.
+After a run finishes, summarize the latest matching output directory. The
+stability summarizer exports numeric tables used for the main end-to-end
+comparison, sufficient-but-unstable rates, and repair-only analysis.
 
 ### HotpotQA
 
@@ -155,6 +208,10 @@ HOTPOT_DIR=$(ls -td results/*hotpot-v2-conf-target-final-ablation-1000-clean* | 
 
 python src/summarize_results.py \
   --input "$HOTPOT_DIR"/eval_hotpotqa_1000.csv
+
+python src/summarize_stability_results.py \
+  --input "$HOTPOT_DIR"/eval_hotpotqa_1000.csv \
+  --dataset hotpotqa
 
 cat "$HOTPOT_DIR"/ablation_summary_hotpotqa_1000.csv
 head -5 "$HOTPOT_DIR"/case_analysis_hotpotqa_1000.csv
@@ -168,8 +225,26 @@ NQ_DIR=$(ls -td results/*nq-v2-k5-chunk180-conf-target-final-ablation-1000-clean
 python src/summarize_results.py \
   --input "$NQ_DIR"/eval_nq_1000.csv
 
+python src/summarize_stability_results.py \
+  --input "$NQ_DIR"/eval_nq_1000.csv \
+  --dataset nq
+
 cat "$NQ_DIR"/ablation_summary_nq_1000.csv
 head -5 "$NQ_DIR"/case_analysis_nq_1000.csv
+```
+
+For MuSiQue and TriviaQA, use the same summary commands with
+`--dataset musique` or `--dataset triviaqa` and the matching evaluation CSV.
+The stability summary writes:
+
+```text
+table_main.csv
+table_sbu.csv
+table_repair.csv
+candidate_rank_corr.csv
+selection_agreement.csv
+result_pattern_check.csv
+examples_sbu.jsonl
 ```
 
 ## Failure-Mode Analysis
@@ -292,7 +367,10 @@ results/gpt_new_baselines/defense_checks/sufficiency_gate_support_check.csv
 
 Local plotting helpers and generated figure files used during development are
 not part of the public reproduction path. The numeric CSV summaries above are
-the reproducible source for checking the reported quality-cost trade-offs.
+the reproducible source for checking the reported quality-cost and repair
+trade-offs. Reviewers can verify Figure 2 from `table_sbu.csv` and Figure 3
+from `table_repair.csv`; the paper figure images themselves are generated
+artifacts rather than required executable inputs.
 
 ## Output Files
 
