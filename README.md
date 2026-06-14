@@ -28,14 +28,13 @@ src/
   summarize_failure_modes.py   # Aggregates sufficiency-vs-confidence failure modes
   summarize_stability_results.py # Exports CIKM stability tables and examples
   run_experiments.py           # End-to-end experiment runner
+  run_semantic_agreement_batch.py # Runs semantic-agreement checks across datasets
+  semantic_agreement_check.py  # LLM-judged semantic agreement sanity check
   rag/                         # Retrieval, signal, and generation utilities
 
-scripts/
-  run_eval.py                  # End-to-end stability evaluation wrapper
-  run_ablation.py              # Ablation wrapper
-  make_tables.py               # Paper table export wrapper
-  plot_tradeoff.py             # Regenerates the quality-cost figure
-  run_hotpotqa_smoke.sh        # Small smoke-test runner
+repro/
+  semantic_agreement_tmux.sh   # Reproduces the semantic-agreement sanity check
+  defense_sanity_checks.py     # CSV-only recovery and support-signal checks
 
 configs/
   base.yaml
@@ -45,9 +44,6 @@ configs/
   triviaqa.yaml
   ablation.yaml
 
-assets/
-  rag_tradeoff.png             # Quality-cost figure used in the paper
-  rag_tradeoff.pdf             # Vector version of the same figure
 ```
 
 ## Setup
@@ -144,6 +140,10 @@ python src/run_experiments.py \
 
 The shared retrieval and OpenAI caches are optional but useful for repeated runs.
 
+For MuSiQue and TriviaQA, use the same command shape with `--mode musique` or
+`--mode triviaqa`. TriviaQA uses the same retrieval budget as HotpotQA in the
+paper runs, while Natural Questions uses the chunking arguments shown above.
+
 ## Summarizing Results
 
 After a run finishes, summarize the latest matching output directory.
@@ -233,18 +233,66 @@ python src/summarize_stability_results.py \
 
 The resulting CSV includes `anchoring_consistency`, `post_selection_consistency`, `anchor_deficit_reduction`, `recovered`, `diagnostic_generations`, `selected_doc_id`, feasibility flags, and per-candidate details for ranking-quality analysis.
 
-## Regenerating the Quality-Cost Figure
+## Defense Sanity Checks
 
-The figure in `assets/rag_tradeoff.png` is generated from the paper table values:
+The paper also reports reviewer-facing sanity checks for the stability repair
+claim. These scripts assume the evaluation CSVs already exist under
+`results/gpt_new_baselines/` or another directory passed through
+`--results-root`.
+
+### Semantic Agreement Check
+
+This check samples sufficient-but-unstable cases and compares token-F1 answer
+agreement against LLM-judged semantic answer agreement.
 
 ```bash
-python scripts/plot_tradeoff.py
+SAMPLE_SIZE=50 SESSION=semantic_agreement_s200 bash repro/semantic_agreement_tmux.sh
 ```
 
-This creates:
+With the default dataset list, `SAMPLE_SIZE=50` evaluates 200 sampled SBU cases:
+50 each from HotpotQA, MuSiQue, Natural Questions, and TriviaQA. The default
+baselines are:
 
-- `assets/rag_tradeoff.png`
-- `assets/rag_tradeoff.pdf`
+- `diagnose_then_expand`
+- `selection_max_query_overlap`
+- `stability_aware_selection`
+
+Outputs are written to:
+
+```text
+results/gpt_new_baselines/semantic_agreement/
+```
+
+The combined summary is:
+
+```text
+results/gpt_new_baselines/semantic_agreement/semantic_agreement_summary_all_s50.csv
+```
+
+### Recovery and Support-Signal Checks
+
+This CSV-only check summarizes recovery, calibrated sufficiency preservation,
+and oracle-support signals for initially sufficient-but-unstable cases.
+
+```bash
+python repro/defense_sanity_checks.py \
+  --results-root results/gpt_new_baselines \
+  --output-dir results/gpt_new_baselines/defense_checks \
+  --size 1000
+```
+
+It writes:
+
+```text
+results/gpt_new_baselines/defense_checks/recovery_definition_check.csv
+results/gpt_new_baselines/defense_checks/sufficiency_gate_support_check.csv
+```
+
+## Quality-Cost Figure
+
+Local plotting helpers and generated figure files used during development are
+not part of the public reproduction path. The numeric CSV summaries above are
+the reproducible source for checking the reported quality-cost trade-offs.
 
 ## Output Files
 
